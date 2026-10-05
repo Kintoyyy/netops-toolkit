@@ -8,6 +8,7 @@ Browser-based OSINT and IT utilities for ISP operators, DNS admins and security 
 | Domain & IP Intel | online | RDAP for domains / IPs / ASNs, geolocation, PTR |
 | DNS Lookup | online | DNS-over-HTTPS queries, resolver compare, DNSSEC |
 | Subdomain Finder | online | Certificate Transparency (crt.sh / CertSpotter) + DNS resolve |
+| Bulk HTTP Checker | online | Mass DNS + reachability + response time, CSV, curl/PowerShell script for exact status codes |
 | Email Security Check | online | MX, SPF lookup count, DMARC, DKIM, MTA-STS, TLS-RPT, BIMI |
 | Email Header Analyzer | offline | Hop trace, delays, auth verdicts, phishing flags |
 | IOC Extractor & Defanger | offline | IPs, domains, URLs, hashes, CVEs, ATT&CK IDs |

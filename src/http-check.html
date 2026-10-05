@@ -1,0 +1,209 @@
+<!-- title: Bulk HTTP Checker | desc: Mass-check domains or URLs — DNS resolution, reachability, response time and status codes, with CSV export and a curl / PowerShell script for exact codes. -->
+<section class="panel">
+  <label class="small" for="raw">Domains or URLs — one per line, or comma / space separated. Bare domains are checked over https://. Lines starting with # are ignored.</label>
+  <textarea id="raw" spellcheck="false" placeholder="example.com&#10;https://www.example.org/login&#10;api.example.net:8443&#10;shop[.]example[.]io"></textarea>
+  <div class="row">
+    <label class="btn" for="file">Load file…</label><input type="file" id="file" accept=".txt,.csv,.list,.log,text/*">
+    <label class="small" style="margin:0 0 0 8px" for="conc">Parallel</label>
+    <select id="conc"><option>4</option><option selected>8</option><option>16</option><option>32</option></select>
+    <label class="small" style="margin:0" for="tmo">Timeout (s)</label>
+    <input type="number" id="tmo" value="10" min="1" max="120" style="width:70px">
+    <label class="chk"><input type="checkbox" id="optDns" checked> Resolve DNS first</label>
+    <label class="chk"><input type="checkbox" id="optCors" checked> Read status code when CORS allows</label>
+    <span class="muted" id="count"></span>
+    <span style="flex:1"></span>
+    <button id="stop" disabled>Stop</button>
+    <button class="primary" id="go">Check all</button>
+  </div>
+  <p class="note">Requests go straight from your browser to each site. Browsers hide the status code of cross-origin responses unless the site sends CORS headers, so most results read <b>Responds</b> (the server answered) rather than 200 / 404 / 500 — use the terminal script below for exact codes and redirect targets. Ad-blockers and privacy extensions can make blocked sites look unreachable. Don't probe live malware / phishing IOCs from a workstation — use the script from an isolated host.</p>
+</section>
+<div id="out"></div>
+<section class="panel">
+  <details id="scriptBox">
+    <summary style="cursor:pointer"><b>Exact status codes &amp; redirects</b> <span class="muted">— run the same list from a terminal</span></summary>
+    <div class="row">
+      <select id="shell" aria-label="Shell"><option value="bash">Bash / zsh (curl)</option><option value="ps">PowerShell 7+ (pwsh)</option></select>
+      <span style="flex:1"></span><button id="scp">Copy</button><button id="sdl">Download</button>
+    </div>
+    <pre id="script" style="margin-top:8px;max-height:360px"></pre>
+    <p class="note">Writes <span class="mono">http-check.csv</span>. Redirects are not followed, so 3xx rows show where they point. Uses the Parallel and Timeout settings above. Code <span class="mono">000</span> (curl) / <span class="mono">0</span> (PowerShell) = no connection, TLS error or timeout.</p>
+  </details>
+</section>
+
+<script>
+const RES = {
+  pending: { label: 'Queued',        cls: 'b-mute', grp: 'pending' },
+  stopped: { label: 'Not checked',   cls: 'b-mute', grp: 'skip', tip: 'Stopped before this target was checked.' },
+  up:      { label: 'Responds',      cls: 'b-ok',   grp: 'up',   tip: 'The server answered. The browser hides the exact status code for cross-origin requests without CORS.' },
+  timeout: { label: 'Timeout',       cls: 'b-bad',  grp: 'fail', tip: 'No answer before the timeout.' },
+  down:    { label: 'No connection', cls: 'b-bad',  grp: 'fail', tip: 'Connection refused or reset, TLS / certificate error, or blocked by the browser or an extension.' },
+  nx:      { label: 'NXDOMAIN',      cls: 'b-mute', grp: 'dns',  tip: 'The domain does not exist.' },
+  noaddr:  { label: 'No A / AAAA',   cls: 'b-mute', grp: 'dns',  tip: 'The name exists but has no IPv4 or IPv6 address.' },
+  mixed:   { label: 'Skipped',       cls: 'b-mute', grp: 'skip', tip: 'Browsers block plain http:// requests from an https:// page. Use the terminal script.' },
+};
+const GROUPS = [['all', 'All'], ['up', 'Responds'], ['fail', 'Failed'], ['dns', 'DNS'], ['skip', 'Skipped']];
+let rows = [], running = false, stopFlag = false, group = 'all', elapsed = 0;
+
+function parseTargets(text){
+  const seen = new Set(), out = [];
+  for (const line of String(text).split('\n')) {
+    for (let t of line.replace(/(^|\s)#.*$/, '').split(/[\s,;]+/)) {
+      t = t.replace(/^["'<(]+|[>"')]+$/g, '').replace(/^hxxp/i, 'http').replace(/\[\.\]|\(\.\)|\{\.\}/g, '.').replace(/\[:\]/g, ':');
+      if (!t) continue;
+      if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(t)) t = 'https://' + t;
+      let u; try { u = new URL(t); } catch { continue; }
+      if (!/^https?:$/.test(u.protocol) || !(u.hostname.includes('.') || u.hostname.startsWith('['))) continue;
+      if (seen.has(u.href)) continue;
+      seen.add(u.href);
+      out.push({ url: u.href, host: u.hostname.replace(/^\[|\]$/g, '') });
+    }
+  }
+  return out;
+}
+
+async function resolve(t){
+  if (ipKind(t.host)) { t.dns = 'ip'; t.ips = [t.host]; return; }
+  try {
+    const [a, aaaa] = await Promise.all([doh(t.host, 'A'), doh(t.host, 'AAAA')]);
+    if (a.Status === 3) { t.dns = 'nx'; return; }
+    t.ips = [...(a.Answer || []).filter(x => x.type === 1), ...(aaaa.Answer || []).filter(x => x.type === 28)].map(x => x.data);
+    t.dns = t.ips.length ? 'ok' : a.Status ? RCODE[a.Status] || 'RCODE ' + a.Status : 'noaddr';
+  } catch { t.dns = 'err'; }
+}
+
+async function check(t, opt){
+  t.result = 'running';
+  if (location.protocol === 'https:' && t.url.startsWith('http:')) { t.result = 'mixed'; return; }
+  if (opt.dns) { await resolve(t); if (t.dns === 'nx' || t.dns === 'noaddr') { t.result = t.dns; return; } }
+  const base = { cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer' };
+  const t0 = performance.now();
+  try {
+    // no-cors: works against any site but the response is opaque (no status, no headers)
+    await fetch(t.url, { ...base, mode: 'no-cors', method: 'HEAD', signal: AbortSignal.timeout(opt.timeout) });
+    t.result = 'up';
+  } catch (e) {
+    t.result = e.name === 'TimeoutError' || e.name === 'AbortError' ? 'timeout' : 'down';
+  }
+  t.ms = Math.round(performance.now() - t0);
+  if (t.result !== 'up' || !opt.cors) return;
+  try {
+    const r = await fetch(t.url, { ...base, mode: 'cors', signal: AbortSignal.timeout(opt.timeout) });
+    t.code = r.status;
+    if (r.redirected) t.final = r.url;
+    r.body?.cancel();
+  } catch { /* no CORS headers — status stays hidden */ }
+}
+
+async function run(){
+  if (running) return;
+  rows = parseTargets($('#raw').value).map((t, i) => ({ ...t, i: i + 1, result: 'pending' }));
+  if (!rows.length) { $('#out').innerHTML = '<div class="err">No valid domains or URLs found.</div>'; return; }
+  const opt = { dns: $('#optDns').checked, cors: $('#optCors').checked, timeout: Math.max(1, +$('#tmo').value || 10) * 1000 };
+  running = true; stopFlag = false; group = 'all';
+  $('#go').disabled = true; $('#stop').disabled = false;
+  renderShell();
+  const tick = setInterval(draw, 400);
+  const t0 = performance.now();
+  let next = 0;
+  const worker = async () => { while (!stopFlag && next < rows.length) await check(rows[next++], opt); };
+  await Promise.all(Array.from({ length: Math.min(+$('#conc').value, rows.length) }, worker));
+  clearInterval(tick);
+  rows.forEach(t => { if (t.result === 'pending') t.result = 'stopped'; });
+  elapsed = (performance.now() - t0) / 1000;
+  running = false;
+  $('#go').disabled = false; $('#stop').disabled = true;
+  draw();
+}
+
+function renderShell(){
+  $('#out').innerHTML = `<section class="panel">
+    <div class="row" style="margin-top:0"><span id="prog"></span><span class="chips" id="grp"></span>
+      <input type="search" id="f" class="grow" placeholder="Filter…">
+      <button id="cpUp">Copy responding</button><button id="cpFail">Copy failed</button><button id="csv">CSV</button></div>
+    <div class="tablewrap" style="margin-top:10px"><table><thead><tr><th>#</th><th>Target</th><th>DNS</th><th>Result</th><th>Code</th><th>Final URL</th><th>Time</th></tr></thead><tbody id="tb"></tbody></table></div>
+  </section>`;
+  $('#grp').onclick = e => { const c = e.target.closest('.chip'); if (c) { group = c.dataset.g; draw(); } };
+  $('#f').oninput = draw;
+  const hosts = g => [...new Set(rows.filter(t => RES[t.result]?.grp === g).map(t => t.url))].join('\n');
+  $('#cpUp').onclick = e => copyText(hosts('up'), e.target);
+  $('#cpFail').onclick = e => copyText(hosts('fail'), e.target);
+  $('#csv').onclick = () => download('http-check.csv', toCSV([
+    ['url', 'host', 'dns', 'ips', 'result', 'status_code', 'final_url', 'ms'],
+    ...rows.map(t => [t.url, t.host, t.dns || '', (t.ips || []).join(' '), RES[t.result]?.label || t.result, t.code || '', t.final || '', t.ms ?? ''])]), 'text/csv');
+  draw();
+}
+
+const shortUrl = u => u.replace(/^https:\/\//, '').replace(/^([^/]+)\/$/, '$1');
+function dnsCell(t){
+  if (t.dns === 'ok') return `<span title="${esc(t.ips.join('\n'))}">${esc(t.ips[0])}</span>${t.ips.length > 1 ? ` <span class="muted">+${t.ips.length - 1}</span>` : ''}`;
+  if (t.dns === 'ip') return '<span class="muted">IP</span>';
+  if (t.dns === 'err') return '<span class="b b-warn" title="DNS-over-HTTPS lookup failed — probed anyway">DoH error</span>';
+  if (t.dns && t.dns !== 'nx' && t.dns !== 'noaddr') return `<span class="b b-warn">${esc(t.dns)}</span>`;
+  return '';
+}
+function resCell(t){
+  if (t.result === 'running') return '<span class="spin"></span>';
+  const r = RES[t.result];
+  return `<span class="b ${r.cls}" title="${esc(r.tip || '')}">${r.label}</span>`;
+}
+function codeCell(t){
+  if (!t.code) return t.result === 'up' ? '<span class="muted" title="Hidden by the browser (no CORS) — use the terminal script">hidden</span>' : '';
+  return `<span class="b ${t.code < 300 ? 'b-ok' : t.code < 400 ? 'b-info' : t.code < 500 ? 'b-warn' : 'b-bad'}">${t.code}</span>`;
+}
+
+function draw(){
+  if (!$('#tb')) return;
+  const done = rows.filter(t => t.result !== 'pending' && t.result !== 'running').length;
+  $('#prog').innerHTML = running ? `<span class="spin"></span> ${done} / ${rows.length}` : `<b>${done}</b> checked in ${elapsed.toFixed(1)} s`;
+  const n = g => g === 'all' ? rows.length : rows.filter(t => RES[t.result]?.grp === g).length;
+  $('#grp').innerHTML = GROUPS.filter(([g]) => g === 'all' || n(g)).map(([g, label]) =>
+    `<span class="chip ${group === g ? 'on' : ''}" data-g="${g}">${label} ${n(g)}</span>`).join('');
+  const q = $('#f').value.trim().toLowerCase();
+  const list = rows.filter(t => (group === 'all' || RES[t.result]?.grp === group) && (!q || t.url.toLowerCase().includes(q)));
+  $('#tb').innerHTML = list.map(t => `<tr>
+    <td class="muted">${t.i}</td>
+    <td class="mono"><a href="../dns-lookup/?q=${encodeURIComponent(t.host)}" title="DNS lookup">${esc(shortUrl(t.url))}</a></td>
+    <td class="mono" style="font-size:12px">${dnsCell(t)}</td>
+    <td>${resCell(t)}</td><td>${codeCell(t)}</td>
+    <td class="mono" style="font-size:12px">${esc(t.final || '')}</td>
+    <td style="white-space:nowrap">${t.ms != null ? t.ms + ' ms' : ''}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">Nothing matches.</td></tr>';
+}
+
+/* ---------- terminal script ---------- */
+function buildScript(){
+  const urls = parseTargets($('#raw').value).map(t => t.url);
+  const list = (urls.length ? urls : ['https://example.com/', 'https://example.org/']).join('\n');
+  const conc = $('#conc').value, tmo = Math.max(1, +$('#tmo').value || 10);
+  if ($('#shell').value === 'bash') return `{
+echo 'url,code,redirect,seconds'
+xargs -P ${conc} -I{} curl -s -o /dev/null -m ${tmo} -w $'{},%{http_code},%{redirect_url},%{time_total}\\n' {} <<'EOF'
+${list}
+EOF
+} > http-check.csv`;
+  return `@'
+${list}
+'@ -split '\\r?\\n' | Where-Object { $_ } | ForEach-Object -ThrottleLimit ${conc} -Parallel {
+  $u = $_; $code = 0; $loc = ''; $err = ''; $sw = [Diagnostics.Stopwatch]::StartNew()
+  $c = [Net.Http.HttpClient]::new([Net.Http.HttpClientHandler]@{ AllowAutoRedirect = $false })
+  $c.Timeout = [TimeSpan]::FromSeconds(${tmo}); $c.DefaultRequestHeaders.UserAgent.ParseAdd('Mozilla/5.0 (http-check)')
+  try {
+    $r = $c.GetAsync($u, [Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+    $code = [int]$r.StatusCode; $loc = "$($r.Headers.Location)"
+  } catch { $err = $_.Exception.GetBaseException().Message } finally { $c.Dispose() }
+  [pscustomobject]@{ Url = $u; Code = $code; Redirect = $loc; Seconds = [math]::Round($sw.Elapsed.TotalSeconds, 3); Error = $err }
+} | Export-Csv http-check.csv -NoTypeInformation`;
+}
+const updateScript = () => { if ($('#scriptBox').open) $('#script').textContent = buildScript(); };
+$('#scriptBox').addEventListener('toggle', updateScript);
+['#shell', '#conc', '#tmo'].forEach(s => $(s).addEventListener('change', updateScript));
+$('#scp').onclick = e => copyText(buildScript(), e.target);
+$('#sdl').onclick = () => $('#shell').value === 'bash' ? download('http-check.sh', buildScript() + '\n') : download('http-check.ps1', buildScript() + '\n');
+
+/* ---------- wiring ---------- */
+let deb;
+$('#raw').addEventListener('input', () => { clearTimeout(deb); deb = setTimeout(() => { const n = parseTargets($('#raw').value).length; $('#count').textContent = n ? `${n} target${n > 1 ? 's' : ''}` : ''; updateScript(); }, 250); });
+$('#file').onchange = async e => { const f = e.target.files[0]; if (!f) return; $('#raw').value = await f.text(); e.target.value = ''; $('#raw').dispatchEvent(new Event('input')); };
+$('#go').onclick = run;
+$('#stop').onclick = () => { stopFlag = true; $('#stop').disabled = true; };
+if (getParam('q')) { $('#raw').value = getParam('q').split(',').join('\n'); $('#raw').dispatchEvent(new Event('input')); run(); }
+</script>
