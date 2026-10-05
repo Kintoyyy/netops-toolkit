@@ -1,0 +1,107 @@
+<!-- title: CTF Magic Decoder | desc: Paste an encoded blob — it recursively tries Base64/32/58/85, hex, binary, octal, decimal, URL, HTML, Morse, ROT13/47, Atbash, reverse, gzip/zlib and hunts for the flag. | js: decoders -->
+<section class="panel">
+  <label class="small" for="in">Ciphertext / encoded data</label>
+  <textarea id="in" spellcheck="false" style="min-height:140px" placeholder="Vm0wd2QyUXlVWGxWV0d4V1YwZDRWMVl3WkRSV01WbDNXa1JTVjAxV2JETlhhMUpUVmpBeFYySkVUbGhoTVVwVVZtcEJlRll5U2tWVQ=="></textarea>
+  <div class="row">
+    <button class="primary" id="go">Auto-decode</button>
+    <label class="small" style="margin:0">Max depth</label><select id="depth"><option>4</option><option selected>6</option><option>8</option><option>10</option></select>
+    <label class="chk"><input type="checkbox" id="optCheap" checked> Try ROT13 / ROT47 / Atbash / reverse between steps</label>
+    <span style="flex:1"></span>
+    <label class="small" style="margin:0">Flag regex</label><input type="text" id="flagre" class="mono" style="width:260px" title="Saved in this browser">
+  </div>
+</section>
+<div id="out"></div>
+
+<script>
+const isText = b => printableRatio(b) >= 0.9;
+const MAGIC_GZ = b => b[0] === 0x1f && b[1] === 0x8b, MAGIC_ZL = b => b[0] === 0x78 && [0x01, 0x5e, 0x9c, 0xda].includes(b[1]);
+
+// Each decoder: name, test(text, bytes) -> bool, run(text, bytes) -> Uint8Array (may be async)
+const DECODERS = [
+  ['Base64',   t => /^[A-Za-z0-9+/\s]+={0,2}\s*$/.test(t) && t.replace(/\s/g, '').length >= 4, t => b64ToBytes(t)],
+  ['Base64URL',t => /^[A-Za-z0-9_\-]+={0,2}$/.test(t.trim()) && /[-_]/.test(t) && t.trim().length >= 4, t => b64ToBytes(t)],
+  ['Base32',   t => /^[A-Z2-7\s]+=*\s*$/i.test(t) && t.replace(/[\s=]/g, '').length >= 8, t => b32ToBytes(t)],
+  ['Base58',   t => /^[1-9A-HJ-NP-Za-km-z]+$/.test(t.trim()) && t.trim().length >= 6, t => b58ToBytes(t)],
+  ['Ascii85',  t => /^<~[\s\S]*~>$/.test(t.trim()) || (/^[!-u\s]+$/.test(t) && /[!-/:-@\[-`]/.test(t) && t.trim().length >= 10), t => a85ToBytes(t)],
+  ['Hex',      t => /^(0x)?([0-9a-f]{2}[\s:,\-]?)+$/i.test(t.trim()) && t.replace(/0x|[\s:,\-]/gi, '').length >= 4, t => hexToBytes(t)],
+  ['Binary',   t => /^[01\s]+$/.test(t) && t.replace(/\s/g, '').length % 8 === 0 && t.replace(/\s/g, '').length >= 8, t => binToBytes(t)],
+  ['Octal',    t => /^\s*([0-3]?[0-7]{1,2}[\s,]+)+[0-3]?[0-7]{1,2}\s*$/.test(t) && /\s/.test(t.trim()), t => octToBytes(t)],
+  ['Decimal',  t => /^\s*(\d{1,3}[\s,]+)+\d{1,3}\s*$/.test(t), t => decToBytes(t)],
+  ['URL',      t => /%[0-9a-f]{2}/i.test(t), t => te.encode(decodeURIComponent(t.replace(/\+/g, ' ')))],
+  ['HTML entities', t => /&(#\d+|#x[0-9a-f]+|[a-z]+);/i.test(t), t => { const x = document.createElement('textarea'); x.innerHTML = t; return te.encode(x.value); }],
+  ['Morse',    t => /^[.\-\s\/|]+$/.test(t.trim()) && /[.\-]/.test(t), t => te.encode(morseDecode(t))],
+  ['Gunzip',   (t, b) => MAGIC_GZ(b), (t, b) => inflate(b, 'gzip')],
+  ['Zlib',     (t, b) => MAGIC_ZL(b), (t, b) => inflate(b, 'deflate')],
+];
+const CHEAP = [
+  ['ROT13', t => /[a-z]/i.test(t), t => te.encode(rot(t, 13))],
+  ['ROT47', t => /[!-~]/.test(t), t => te.encode(rot47(t))],
+  ['Atbash', t => /[a-z]/i.test(t), t => te.encode(atbash(t))],
+  ['Reverse', t => t.length > 3, t => te.encode([...t].reverse().join(''))],
+];
+
+async function solve(input, maxDepth, cheap){
+  const start = te.encode(input.trim());
+  const seen = new Set([input.trim()]);
+  let frontier = [{ bytes: start, path: [] }];
+  const results = [];
+  let explored = 0;
+  for (let depth = 0; depth < maxDepth && frontier.length; depth++) {
+    const next = [];
+    for (const node of frontier) {
+      const t = asLatin(node.bytes);
+      const lastCheap = node.path.length && CHEAP.some(c => c[0] === node.path.at(-1));
+      const ops = [...DECODERS, ...(cheap && !lastCheap ? CHEAP : [])];
+      for (const [name, test, run] of ops) {
+        if (++explored > 4000) break;
+        if (!test(t, node.bytes)) continue;
+        let out;
+        try { out = await run(t, node.bytes); } catch { continue; }
+        if (!out || out.length < 2) continue;
+        const key = asLatin(out);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const child = { bytes: out, path: [...node.path, name] };
+        const text = isText(out);
+        const isDecoder = !CHEAP.some(c => c[0] === name);
+        const flags = isText(out) || printableRatio(out) > 0.6 ? findFlags(key) : [];
+        if (isDecoder || flags.length) results.push({ ...child, text, flags, score: text ? englishScore(key) : -20 + printableRatio(out) * 10 });
+        if (text || MAGIC_GZ(out) || MAGIC_ZL(out)) next.push(child);
+      }
+    }
+    // keep the frontier focused: best-scoring first, capped
+    frontier = next.sort((a, b) => bytesScore(b.bytes) - bytesScore(a.bytes)).slice(0, 60);
+  }
+    const cheapN = r => r.path.filter(x => CHEAP.some(c => c[0] === x)).length;
+  const flagQ = r => !r.flags.length ? 0 : (r.text ? 2 : 0) + (FLAG_WORDS.test(r.flags[0]) ? 2 : 1);
+  results.sort((a, b) => (flagQ(b) - flagQ(a)) || (cheapN(a) - cheapN(b)) || (b.score - a.score) || (a.path.length - b.path.length));
+  return { results, explored };
+}
+
+async function run(){
+  const input = $('#in').value; if (!input.trim()) return;
+  $('#out').innerHTML = '<section class="panel"><span class="spin"></span> Decoding…</section>';
+  await sleep(10);
+  const t0 = performance.now();
+  const { results, explored } = await solve(input, +$('#depth').value, $('#optCheap').checked);
+  const ms = Math.round(performance.now() - t0);
+  const withFlags = results.filter(r => r.flags.length);
+  const top = results.slice(0, 25);
+  $('#out').innerHTML = `<section class="panel">
+    <div class="row" style="margin-top:0">${withFlags.length ? `<span class="b b-ok">Flag found</span> <b class="mono">${esc(withFlags[0].flags[0])}</b> <button id="cpFlag">Copy</button>` : '<span class="b b-mute">No flag pattern matched</span> <span class="muted">— showing the most readable results</span>'}
+      <span style="flex:1"></span><span class="muted">${results.length} candidates · ${explored} attempts · ${ms} ms</span></div>
+    <div class="tablewrap" style="margin-top:12px"><table><thead><tr><th style="width:34%">Recipe</th><th>Output</th></tr></thead><tbody>
+    ${top.map((r, i) => `<tr><td>${r.path.map(p => `<span class="b ${CHEAP.some(c => c[0] === p) ? 'b-mute' : 'b-info'}">${esc(p)}</span>`).join(' → ')}
+        ${r.flags.length ? ' <span class="b b-ok">flag</span>' : ''}<div class="muted" style="font-size:11px;margin-top:3px">${r.bytes.length} bytes · ${r.text ? 'text' : 'binary'}</div></td>
+      <td class="mono" style="font-size:12px;white-space:pre-wrap">${r.text ? hlFlags(asText(r.bytes).slice(0, 600)) : esc(hexdump(r.bytes, 0, 64))}
+        <div class="row" style="margin-top:4px"><button data-cp="${i}" style="padding:2px 8px;font-size:12px">Copy</button><button data-dl="${i}" style="padding:2px 8px;font-size:12px">Download</button><button data-use="${i}" style="padding:2px 8px;font-size:12px">Use as input</button></div></td></tr>`).join('') || '<tr><td colspan="2" class="muted">Nothing decoded. The input may be encrypted (try the XOR or Cipher tools) rather than encoded.</td></tr>'}
+    </tbody></table></div></section>`;
+  if (withFlags.length) $('#cpFlag').onclick = e => copyText(withFlags[0].flags[0], e.target);
+  $$('[data-cp]').forEach(b => b.onclick = () => copyText(top[b.dataset.cp].text ? asText(top[b.dataset.cp].bytes) : toHex(top[b.dataset.cp].bytes), b));
+  $$('[data-dl]').forEach(b => b.onclick = () => downloadBytes('decoded.bin', top[b.dataset.dl].bytes));
+  $$('[data-use]').forEach(b => b.onclick = () => { $('#in').value = asText(top[b.dataset.use].bytes); run(); scrollTo(0, 0); });
+}
+$('#go').onclick = run;
+$('#in').addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') run(); });
+document.addEventListener('flagchange', () => $('#in').value && run());
+</script>

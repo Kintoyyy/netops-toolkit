@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Wraps src/<slug>.html fragments into tools/<slug>/index.html with the shared shell.
-Fragment format: first line  <!-- title: ... | desc: ... -->  then body HTML + <script>."""
+Fragment format: first line  <!-- title: ... | desc: ... [| js: decoders] -->  then body HTML + <script>."""
 import pathlib, re, html
 
 ROOT = pathlib.Path(__file__).parent
@@ -21,7 +21,7 @@ TEMPLATE = """<!doctype html>
     <button id="themeBtn" title="Toggle theme"></button>
   </header>
 <script src="../../assets/common.js"></script>
-{body}
+{extra}{body}
 </div>
 </body>
 </html>
@@ -29,9 +29,10 @@ TEMPLATE = """<!doctype html>
 
 for src in sorted((ROOT / "src").glob("*.html")):
     text = src.read_text()
-    m = re.match(r"<!--\s*title:\s*(.*?)\s*\|\s*desc:\s*(.*?)\s*-->\n", text)
+    m = re.match(r"<!--\s*title:\s*(.*?)\s*\|\s*desc:\s*(.*?)\s*(?:\|\s*js:\s*(.*?)\s*)?-->\n", text)
     assert m, f"missing header in {src}"
     out = ROOT / "tools" / src.stem / "index.html"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(TEMPLATE.format(title=html.escape(m[1]), desc=html.escape(m[2]), body=text[m.end():]))
+    out.write_text(TEMPLATE.format(title=html.escape(m[1]), desc=html.escape(m[2]), body=text[m.end():],
+        extra=''.join(f'<script src="../../assets/{j.strip()}.js"></script>\n' for j in (m[3] or '').split(',') if j.strip())))
     print("built", out.relative_to(ROOT))

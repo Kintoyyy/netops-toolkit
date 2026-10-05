@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RSA Toolkit · NetOps Toolkit</title>
+<meta name="description" content="Solve textbook-RSA challenges — compute d, decrypt, factor weak moduli (small factors, Fermat, Pollard rho, perfect squares, multi-prime) and run small-e and Wiener attacks. Fully offline.">
+<link rel="stylesheet" href="../../assets/style.css">
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="../../">← All tools</a>
+  <header class="top">
+    <div><h1>RSA Toolkit</h1><p class="sub">Solve textbook-RSA challenges — compute d, decrypt, factor weak moduli (small factors, Fermat, Pollard rho, perfect squares, multi-prime) and run small-e and Wiener attacks. Fully offline.</p></div>
+    <button id="themeBtn" title="Toggle theme"></button>
+  </header>
+<script src="../../assets/common.js"></script>
+<script src="../../assets/decoders.js"></script>
+<section class="panel">
+  <div class="grid2">
+    <div>
+      <label class="small" for="n">n (modulus)</label><textarea id="n" class="mono" style="min-height:70px" spellcheck="false"></textarea>
+      <div class="row"><div style="flex:1"><label class="small" for="e">e</label><input type="text" id="e" class="mono" value="65537" style="width:100%"></div>
+        <div style="flex:3"><label class="small" for="c">c (ciphertext)</label><input type="text" id="c" class="mono" style="width:100%"></div></div>
+    </div>
+    <div>
+      <div class="row" style="margin-top:0"><div style="flex:1"><label class="small" for="p">p (optional)</label><input type="text" id="p" class="mono" style="width:100%"></div>
+        <div style="flex:1"><label class="small" for="q">q (optional)</label><input type="text" id="q" class="mono" style="width:100%"></div></div>
+      <label class="small" for="d" style="margin-top:8px">d (optional)</label><input type="text" id="d" class="mono" style="width:100%">
+      <label class="small" for="fx" style="margin-top:8px">All prime factors (optional, comma-separated — e.g. from factordb)</label><input type="text" id="fx" class="mono" style="width:100%">
+    </div>
+  </div>
+  <div class="row">
+    <button class="primary" id="go">Solve</button><button id="sample">Load sample</button><button id="clear">Clear</button>
+    <label class="small" style="margin:0">Factoring time budget</label><select id="budget"><option value="3">3 s</option><option value="10" selected>10 s</option><option value="30">30 s</option></select>
+    <span style="flex:1"></span><span class="muted" style="font-size:12px">Numbers in decimal or 0x-hex.</span>
+  </div>
+</section>
+<div id="out"></div>
+
+<script>
+/* ---------- BigInt number theory ---------- */
+const bits = n => n.toString(2).length;
+const abs = x => x < 0n ? -x : x;
+const gcd = (a, b) => { a = abs(a); b = abs(b); while (b) [a, b] = [b, a % b]; return a; };
+function modpow(b, e, m){ let r = 1n; b %= m; if (b < 0n) b += m; while (e > 0n) { if (e & 1n) r = r * b % m; b = b * b % m; e >>= 1n; } return r; }
+function modinv(a, m){ let g = a % m; if (g < 0n) g += m;
+  let oldR = g, r = m, oldS = 1n, s = 0n; while (r) { const q = oldR / r; [oldR, r] = [r, oldR - q * r]; [oldS, s] = [s, oldS - q * s]; }
+  if (oldR !== 1n) return null; return ((oldS % m) + m) % m; }
+function isqrt(n){ if (n < 2n) return n; let x = 1n << BigInt((bits(n) >> 1) + 1); for (;;) { const y = (x + n / x) >> 1n; if (y >= x) return x; x = y; } }
+function iroot(n, k){ // floor(n^(1/k))
+  if (n < 2n) return n; const kb = BigInt(k), k1 = kb - 1n;
+  let x = 1n << (BigInt(bits(n)) / kb + 1n);            // start above the root, Newton descends
+  for (;;) { const y = (k1 * x + n / x ** k1) / kb; if (y >= x) break; x = y; }
+  while (x ** kb > n) x--; while ((x + 1n) ** kb <= n) x++;
+  return x;
+}
+const SMALL_PRIMES = (() => { const N = 100000, s = new Uint8Array(N + 1), p = []; for (let i = 2; i <= N; i++) if (!s[i]) { p.push(BigInt(i)); for (let j = i * i; j <= N; j += i) s[j] = 1; } return p; })();
+function isPrime(n){
+  if (n < 2n) return false;
+  for (const p of SMALL_PRIMES.slice(0, 60)) { if (n === p) return true; if (n % p === 0n) return false; }
+  let d = n - 1n, r = 0; while (!(d & 1n)) { d >>= 1n; r++; }
+  for (const a of [2n, 3n, 5n, 7n, 11n, 13n, 17n, 19n, 23n, 29n, 31n, 37n, 41n]) {
+    let x = modpow(a, d, n); if (x === 1n || x === n - 1n) continue;
+    let ok = false; for (let i = 1; i < r; i++) { x = x * x % n; if (x === n - 1n) { ok = true; break; } }
+    if (!ok) return false;
+  }
+  return true;
+}
+const parseBig = s => { s = String(s || '').replace(/[\s_,]/g, ''); if (!s) return null; if (/^0x[0-9a-f]+$/i.test(s)) return BigInt(s); if (/^\d+$/.test(s)) return BigInt(s); if (/^[0-9a-f]+$/i.test(s)) return BigInt('0x' + s); throw new Error(`Can't parse number: ${s.slice(0, 40)}…`); };
+function toBytes(m){ let h = m.toString(16); if (h.length % 2) h = '0' + h; return new Uint8Array(h.match(/../g).map(x => parseInt(x, 16))); }
+
+/* ---------- factoring ---------- */
+async function pollardBrent(n, deadline){
+  if (!(n & 1n)) return 2n;
+  for (let attempt = 0; attempt < 20 && Date.now() < deadline; attempt++) {
+    let y = BigInt(Math.floor(Math.random() * 1e9)) % n, c = BigInt(1 + Math.floor(Math.random() * 1e9)) % n, m = 128n, g = 1n, r = 1n, q = 1n, x, ys;
+    const f = v => (v * v + c) % n;
+    let iter = 0;
+    while (g === 1n) {
+      x = y; for (let i = 0n; i < r; i++) y = f(y);
+      let k = 0n;
+      while (k < r && g === 1n) { ys = y; const lim = m < r - k ? m : r - k; for (let i = 0n; i < lim; i++) { y = f(y); q = q * abs(x - y) % n; } g = gcd(q, n); k += m; }
+      r <<= 1n;
+      if (++iter % 4 === 0) { await sleep(0); if (Date.now() > deadline) return null; }
+    }
+    if (g === n) { do { ys = f(ys); g = gcd(abs(x - ys), n); } while (g === 1n); }
+    if (g !== n) return g;
+  }
+  return null;
+}
+function fermat(n, iters = 50000, deadline = Infinity){
+  let a = isqrt(n); if (a * a < n) a++;
+  for (let i = 0; i < iters; i++, a++) { const b2 = a * a - n, b = isqrt(b2); if (b * b === b2) return a - b; if (i % 1000 === 999 && Date.now() > deadline) break; }
+  return null;
+}
+async function factorize(n, deadline, log){
+  const out = [];
+  const stack = [n];
+  while (stack.length) {
+    let m = stack.pop();
+    if (m === 1n) continue;
+    if (isPrime(m)) { out.push(m); continue; }
+    // trial division
+    let found = null;
+    for (const p of SMALL_PRIMES) { if (p * p > m) break; if (m % p === 0n) { found = p; break; } }
+    if (found) { log(`Small factor ${found} by trial division`); stack.push(found, m / found); continue; }
+    const s = isqrt(m); if (s * s === m) { log(`Perfect square: ${bits(m)}-bit n = p²`); stack.push(s, s); continue; }
+    for (let k = 3; k <= 5; k++) { const r = iroot(m, k); if (r ** BigInt(k) === m) { log(`Perfect ${k}th power`); for (let i = 0; i < k; i++) stack.push(r); found = r; break; } }
+    if (found) continue;
+    const f = fermat(m, 50000, deadline); if (f && f !== 1n && f !== m) { log(`Fermat: p and q are close together`); stack.push(f, m / f); continue; }
+    if (Date.now() > deadline) return { factors: out, rest: [m, ...stack] };
+    const g = await pollardBrent(m, deadline);
+    if (g && g !== m) { log(`Pollard rho found a ${bits(g)}-bit factor`); stack.push(g, m / g); continue; }
+    return { factors: out, rest: [m, ...stack] };
+  }
+  return { factors: out.sort((a, b) => (a < b ? -1 : 1)), rest: [] };
+}
+function wiener(e, n){
+  // continued fraction expansion of e/n
+  let a = e, b = n; const cf = [];
+  while (b) { cf.push(a / b); [a, b] = [b, a % b]; if (cf.length > 2000) break; }
+  let h1 = 1n, h2 = 0n, k1 = 0n, k2 = 1n;
+  for (const q of cf) {
+    const h = q * h1 + h2, k = q * k1 + k2; h2 = h1; h1 = h; k2 = k1; k1 = k;
+    const K = h, D = k; if (K === 0n) continue;
+    if ((e * D - 1n) % K) continue;
+    const phi = (e * D - 1n) / K, s = n - phi + 1n, disc = s * s - 4n * n;
+    if (disc < 0n) continue; const t = isqrt(disc);
+    if (t * t === disc && ((s + t) & 1n) === 0n) return { d: D, p: (s + t) / 2n, q: (s - t) / 2n };
+  }
+  return null;
+}
+const phiOf = fs => { const cnt = new Map(); fs.forEach(p => cnt.set(p, (cnt.get(p) || 0n) + 1n)); let phi = 1n; for (const [p, k] of cnt) phi *= p ** (k - 1n) * (p - 1n); return phi; };
+
+/* ---------- solve ---------- */
+async function solve(){
+  const steps = []; const log = s => steps.push(s);
+  const show = (extra = '') => { $('#out').innerHTML = `<section class="panel"><h2>Steps</h2><ol style="margin:0;padding-left:20px">${steps.map(s => `<li>${s}</li>`).join('')}</ol></section>${extra}`; };
+  try {
+    let n = parseBig($('#n').value), e = parseBig($('#e').value), c = parseBig($('#c').value), p = parseBig($('#p').value), q = parseBig($('#q').value), d = parseBig($('#d').value);
+    let fx = $('#fx').value.trim() ? $('#fx').value.split(/[,;\s]+/).filter(Boolean).map(parseBig) : null;
+    if (!n && p && q) { n = p * q; log('n = p × q'); }
+    if (!n) throw new Error('Enter n (or p and q)');
+    log(`n is ${bits(n)} bits${e ? `, e = ${bits(e) > 64 ? `a ${bits(e)}-bit value (large e → Wiener candidate)` : e}` : ''}`);
+    let factors = null;
+    if (fx) { const prod = fx.reduce((a, b) => a * b, 1n); if (prod !== n) throw new Error('The listed factors do not multiply to n'); factors = fx; log(`Using ${fx.length} supplied factors`); }
+    else if (p && q) { if (p * q !== n) throw new Error('p × q ≠ n'); factors = [p, q]; log('Using supplied p and q'); }
+    else if (p || q) { const f = p || q; if (n % f) throw new Error('Supplied factor does not divide n'); factors = [f, n / f]; log('Derived the other factor as n / p'); }
+
+    let m = null;
+    // shortcut: d given
+    if (d && c != null) { m = modpow(c, d, n); log('m = c^d mod n (d supplied)'); }
+
+    // small-e attack
+    if (m == null && c != null && e && e <= 17n) {
+      for (let k = 0n; k <= 300n; k++) { const r = iroot(c + k * n, Number(e)); if (r ** e === c + k * n) { m = r; log(k ? `Small-e attack: m^e = c + ${k}·n, took the exact ${e === 3n ? 'cube' : e + '-th'} root` : `Small-e attack: m^e < n, so m = ${e === 3n ? 'cube' : e + '-th'} root of c (no modular reduction happened)`); break; } }
+    }
+    // Wiener
+    if (m == null && !factors && e && bits(e) > bits(n) * 0.6) {
+      const w = wiener(e, n);
+      if (w) { factors = [w.p, w.q]; d = w.d; log(`Wiener's attack succeeded — d is small (${bits(w.d)} bits)`); }
+      else log('Wiener attack: no small d found');
+    }
+    // n prime?
+    if (m == null && !factors && isPrime(n)) { factors = [n]; log('n itself is prime → φ(n) = n − 1'); }
+    // factor
+    if (m == null && !factors) {
+      const budget = +$('#budget').value * 1000;
+      show(`<section class="panel"><span class="spin"></span> Factoring (up to ${budget / 1000}s)…</section>`); await sleep(20);
+      const r = await factorize(n, Date.now() + budget, log);
+      if (r.rest.length) {
+        log(`Could not fully factor within the time budget${r.factors.length ? ` (found ${r.factors.join(', ')})` : ''}`);
+        show(`<section class="panel"><p style="margin:0">n looks properly generated. Check <a href="https://factordb.com/index.php?query=${n}" target="_blank" rel="noopener">factordb.com ↗</a> for known factorizations, or look for other weaknesses (shared primes between several n, leaked dp/dq, Håstad broadcast, LSB oracle).</p></section>`);
+        return;
+      }
+      factors = r.factors; log(`n = ${factors.length > 2 ? factors.length + ' primes (multi-prime RSA)' : 'p × q'}`);
+    }
+    let phi = null;
+    if (factors) {
+      phi = phiOf(factors);
+      if (!d && e) { d = modinv(e, phi); if (d == null) { log(`gcd(e, φ) = ${gcd(e, phi)} — e is not invertible. Try per-prime roots or e/gcd tricks.`); } else log('d = e⁻¹ mod φ(n)'); }
+      if (m == null && c != null && d) { m = modpow(c, d, n); log('m = c^d mod n'); }
+    }
+    let res = '';
+    const rows = [];
+    if (factors) rows.push(['Factors', factors.map(f => `<div>${f}</div>`).join('')]);
+    if (phi) rows.push(['φ(n)', phi]);
+    if (d) rows.push(['d', d]);
+    if (m != null) {
+      const by = toBytes(m), txt = asLatin(by), flags = findFlags(txt);
+      rows.push(['m (decimal)', m], ['m (hex)', '0x' + m.toString(16)], ['m (text)', `<span style="white-space:pre-wrap">${hlFlags(printableRatio(by) > 0.7 ? tdUtf8.decode(by) : safeText(by))}</span>`]);
+      res = flags.length ? `<div class="row" style="margin-top:0;margin-bottom:10px"><span class="b b-ok">Flag</span> <b class="mono">${esc(flags[0])}</b> <button id="cpf">Copy</button></div>` : '';
+    } else if (c == null) log('No ciphertext supplied — showing key material only');
+    show(`<section class="panel"><h2>Result</h2>${res}<div class="kv">${rows.map(([k, v]) => `<div>${k}</div><div>${typeof v === 'bigint' ? v.toString() : v}</div>`).join('')}</div></section>`);
+    const cp = $('#cpf'); if (cp) cp.onclick = () => copyText(findFlags(asLatin(toBytes(m)))[0], cp);
+  } catch (err) { log(`<span style="color:var(--bad)">${esc(err.message)}</span>`); show(); }
+}
+$('#go').onclick = solve;
+$('#clear').onclick = () => { ['n', 'c', 'p', 'q', 'd', 'fx'].forEach(k => $('#' + k).value = ''); $('#e').value = '65537'; $('#out').innerHTML = ''; };
+$('#sample').onclick = () => {
+  // close primes → Fermat; message "flag{close_primes_are_bad}"
+  const p = 0xd7e3d5ffb59bb22e51bc5e2d7e1bd31da0fb15de5fd7ec5ee0c3ed21b38c4c37n;
+  let q = p + 2n; while (!isPrime(q)) q += 2n;
+  const pp = isPrime(p) ? p : (() => { let x = p | 1n; while (!isPrime(x)) x += 2n; return x; })();
+  if (q === pp) { q += 2n; while (!isPrime(q)) q += 2n; }
+  const n = pp * q, e = 65537n, m = BigInt('0x' + toHex(te.encode('flag{close_primes_are_bad}')));
+  $('#n').value = n; $('#e').value = e; $('#c').value = modpow(m, e, n); ['p', 'q', 'd', 'fx'].forEach(k => $('#' + k).value = ''); solve();
+};
+</script>
+
+</div>
+</body>
+</html>

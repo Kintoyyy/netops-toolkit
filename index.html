@@ -85,8 +85,8 @@ footer a{color:var(--muted)}
   </nav>
 
   <section class="hero">
-    <h1>Small tools for <span>network, OSINT &amp; NOC</span> work.</h1>
-    <p>Browser-based OSINT and IT utilities for ISP operators, DNS admins and security folks. <b>Offline</b> tools never send your data anywhere; <b>online</b> tools query public APIs (DoH, RDAP, CT logs) straight from your browser.</p>
+    <h1>Small tools for <span>network, OSINT &amp; CTF</span> work.</h1>
+    <p>Browser-based OSINT, CTF and IT utilities for ISP operators, DNS admins, security folks and CTF players. <b>Offline</b> tools never send your data anywhere; <b>online</b> tools query public APIs (DoH, RDAP, CT logs) straight from your browser.</p>
     <div class="points"><span>No backend</span><span>No sign-up</span><span>No tracking</span><span>Open source</span></div>
   </section>
 
@@ -135,10 +135,29 @@ const TOOLS = [
     desc: 'Vendor (OUI) lookup, Cisco/colon/hyphen formats, randomized-MAC detection, HSRP/VRRP addresses and EUI-64.' },
   { name: 'Encode / Decode Toolbox', href: 'tools/encode-decode/', tags: ['Utilities'], icon: 'term', mode: 'offline',
     desc: 'Base64, URL, hex, HTML, JWT, punycode, MD5/SHA hashes for text or files, Unix timestamps, JSON, UUIDs and passwords.' },
+  { name: 'Magic Decoder', href: 'tools/magic-decoder/', tags: ['CTF', 'Utilities'], icon: 'wand', mode: 'offline',
+    desc: 'Recursively tries Base64/32/58/85, hex, binary, URL, Morse, ROT, gzip and more on a blob until the flag falls out.' },
+  { name: 'Classical Cipher Solver', href: 'tools/cipher-solver/', tags: ['CTF'], icon: 'key', mode: 'offline',
+    desc: 'Caesar brute force, Vigenère auto-crack, Affine, Rail fence, Bacon, Polybius, Morse, A1Z26 — with frequency analysis and IoC.' },
+  { name: 'XOR Cracker', href: 'tools/xor-cracker/', tags: ['CTF'], icon: 'xor', mode: 'offline',
+    desc: 'Single-byte brute force, repeating-key recovery by Hamming distance, and key derivation from known plaintext like flag{.' },
+  { name: 'File Analyzer', href: 'tools/file-analyzer/', tags: ['CTF', 'Security'], icon: 'file', mode: 'offline',
+    desc: 'Magic bytes, embedded-file carving, PNG CRC check with dimension fixer, JPEG comments, ZIP listing, strings, entropy, hex view.' },
+  { name: 'Image Steganography', href: 'tools/image-stego/', tags: ['CTF'], icon: 'image', mode: 'offline',
+    desc: 'Bit-plane and channel viewer, pixel inspector, configurable LSB extraction and an automatic LSB scan for hidden data.' },
+  { name: 'RSA Toolkit', href: 'tools/rsa-toolkit/', tags: ['CTF'], icon: 'lock', mode: 'offline',
+    desc: 'Compute d and decrypt; factor weak n (small factors, Fermat, Pollard rho, multi-prime); small-e and Wiener attacks.' },
 ];
 
 const ICONS = {
+  wand:   '<path d="m15 4-1 3-3 1 3 1 1 3 1-3 3-1-3-1z"/><path d="M3 21 14 10"/><path d="M19 14v4M17 16h4M6 3v3M4.5 4.5h3"/>',
+  key:    '<circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.3-9.3M17 6l3 3M14 9l2 2"/>',
+  xor:    '<circle cx="12" cy="12" r="9"/><path d="M12 3v18M3 12h18"/>',
+  file:   '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 13h6M9 17h4"/>',
+  image:  '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/>',
+  lock:   '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
   shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>',
+  pulse:  '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
   globe:  '<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
   tree:   '<rect x="9" y="2" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="16" y="16" width="6" height="6" rx="1"/><path d="M12 8v4M5 16v-2h14v2"/>',
@@ -148,7 +167,6 @@ const ICONS = {
   calc:   '<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M8 6h8M8 11h.01M12 11h.01M16 11h.01M8 15h.01M12 15h.01M16 15h.01M8 19h8"/>',
   filter: '<path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/>',
   chip:   '<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/>',
-  pulse:  '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
   chart:  '<path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 5-6"/>',
   term:   '<path d="m4 17 6-6-6-6M12 19h8"/>',
 };

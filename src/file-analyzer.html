@@ -1,0 +1,203 @@
+<!-- title: File Analyzer | desc: Forensics for CTF files — magic bytes, embedded-file carving (binwalk-style), PNG chunk/CRC check with width/height fixer, JPEG comments, ZIP listing, strings, entropy and hex view. Fully offline. | js: decoders -->
+<section class="panel" id="drop" style="text-align:center;border-style:dashed;padding:28px">
+  <p style="margin:0 0 10px"><b>Drop a file here</b> or</p>
+  <label class="btn" for="file" style="background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600">Choose file…</label><input type="file" id="file">
+  <p class="note">The file is analyzed in your browser and never uploaded.</p>
+</section>
+<div id="out"></div>
+
+<script>
+let F = null, NAME = '';
+/* ---------- signatures ---------- */
+const SIGS = [
+  ['PNG image', 'png', '89504e470d0a1a0a'], ['JPEG image', 'jpg', 'ffd8ff'], ['GIF image', 'gif', '47494638'], ['WebP / RIFF', 'riff', '52494646'],
+  ['TIFF (LE)', 'tif', '49492a00'], ['TIFF (BE)', 'tif', '4d4d002a'], ['Photoshop PSD', 'psd', '38425053'], ['BMP image', 'bmp', '424d', true],
+  ['ZIP archive (also docx/xlsx/jar/apk)', 'zip', '504b0304'], ['RAR archive', 'rar', '526172211a07'], ['7-Zip archive', '7z', '377abcaf271c'],
+  ['GZIP', 'gz', '1f8b08'], ['BZIP2', 'bz2', '425a6839314159265359'], ['XZ', 'xz', 'fd377a585a00'], ['Zstandard', 'zst', '28b52ffd'],
+  ['PDF document', 'pdf', '255044462d'], ['ELF executable', 'elf', '7f454c46'], ['Windows PE (MZ)', 'exe', '4d5a', true], ['Java class', 'class', 'cafebabe'],
+  ['MS Office (OLE2)', 'ole', 'd0cf11e0a1b11ae1'], ['SQLite database', 'sqlite', '53514c69746520666f726d6174203300'],
+  ['PCAP capture', 'pcap', 'd4c3b2a1'], ['PCAP capture (BE)', 'pcap', 'a1b2c3d4'], ['PCAPNG capture', 'pcapng', '0a0d0d0a'],
+  ['MP3 (ID3)', 'mp3', '494433', true], ['OGG', 'ogg', '4f676753'], ['FLAC audio', 'flac', '664c6143'], ['MIDI', 'mid', '4d546864'],
+  ['KeePass DB', 'kdbx', '03d9a29a'], ['LUKS volume', 'luks', '4c554b53babe'], ['ISO 9660', 'iso', '4344303031', true],
+  ['Zlib stream', 'zlib', '789c', true], ['OpenSSH private key', 'key', '2d2d2d2d2d424547494e204f50454e5353482050524956415445204b4559'],
+  ['PEM block', 'pem', '2d2d2d2d2d424547494e20'],
+].map(([name, ext, hex, weak]) => ({ name, ext, sig: hexToBytes(hex), weak: !!weak }));
+const at = (b, off, sig) => { if (off + sig.length > b.length) return false; for (let i = 0; i < sig.length; i++) if (b[off + i] !== sig[i]) return false; return true; };
+function detect(b){
+  const hits = SIGS.filter(s => at(b, 0, s.sig));
+  if (at(b, 257, te.encode('ustar'))) hits.push({ name: 'TAR archive', ext: 'tar' });
+  if (at(b, 0x8001, te.encode('CD001'))) hits.push({ name: 'ISO 9660 image', ext: 'iso' });
+  if (!hits.length) { if (printableRatio(b.subarray(0, 4096)) > 0.95) hits.push({ name: 'Text / ASCII data', ext: 'txt' }); }
+  return hits;
+}
+function riffType(b, off){ return asLatin(b.subarray(off + 8, off + 12)); }
+
+/* ---------- carving ---------- */
+function indexOfSeq(b, seq, from = 0){ outer: for (let i = from; i <= b.length - seq.length; i++) { if (b[i] !== seq[0]) continue; for (let j = 1; j < seq.length; j++) if (b[i + j] !== seq[j]) continue outer; return i; } return -1; }
+function lastIndexOfSeq(b, seq){ outer: for (let i = b.length - seq.length; i >= 0; i--) { for (let j = 0; j < seq.length; j++) if (b[i + j] !== seq[j]) continue outer; return i; } return -1; }
+function carveEnd(b, off, ext){
+  if (ext === 'png') { const i = indexOfSeq(b, te.encode('IEND'), off); return i > 0 ? i + 8 : b.length; }
+  if (ext === 'jpg') { let i = off + 2; while (i < b.length - 1) { if (b[i] !== 0xff) { i++; continue; } const m = b[i + 1]; if (m === 0xd9) return i + 2; if (m === 0xda) { i += 2; while (i < b.length - 1 && !(b[i] === 0xff && b[i + 1] === 0xd9)) i++; return Math.min(b.length, i + 2); } if (m >= 0xd0 && m <= 0xd7 || m === 0x01 || m === 0xff) { i += m === 0xff ? 1 : 2; continue; } i += 2 + ((b[i + 2] << 8) | b[i + 3]); } return b.length; }
+  if (ext === 'gif') { const i = indexOfSeq(b, new Uint8Array([0x00, 0x3b]), off + 13); return i > 0 ? i + 2 : b.length; }
+  if (ext === 'pdf') { const i = lastIndexOfSeq(b, te.encode('%%EOF')); return i > off ? Math.min(b.length, i + 6) : b.length; }
+  if (ext === 'zip') { const i = indexOfSeq(b, new Uint8Array([0x50, 0x4b, 0x05, 0x06]), off); return i > 0 ? Math.min(b.length, i + 22 + (b[i + 20] | (b[i + 21] << 8))) : b.length; }
+  if (ext === 'riff') return Math.min(b.length, off + 8 + (b[off + 4] | (b[off + 5] << 8) | (b[off + 6] << 16) | (b[off + 7] << 24)) >>> 0);
+  return b.length;
+}
+function scanEmbedded(b){
+  const found = [], strong = SIGS.filter(s => !s.weak && s.sig.length >= 4);
+  const firsts = new Set(strong.map(s => s.sig[0]));
+  const lim = Math.min(b.length, 64 * 1024 * 1024);
+  for (let i = 0; i < lim; i++) {
+    if (!firsts.has(b[i])) continue;
+    for (const s of strong) if (at(b, i, s.sig)) { found.push({ off: i, ...s }); break; }
+  }
+  // drop ZIP local headers that belong to an earlier ZIP (only keep first of a run)
+  return found.filter((f, i) => !(f.ext === 'zip' && found.slice(0, i).some(p => p.ext === 'zip' && carveEnd(b, p.off, 'zip') > f.off)) &&
+    !(f.ext === 'pem' && found.some(p => p.ext === 'key' && p.off === f.off)));
+}
+
+/* ---------- CRC32 ---------- */
+const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(b, start = 0, end = b.length){ let c = 0xffffffff; for (let i = start; i < end; i++) c = CRC_T[(c ^ b[i]) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; }
+const u32 = (b, o) => ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0;
+
+/* ---------- format parsers ---------- */
+function pngInfo(b){
+  const chunks = []; let o = 8;
+  while (o + 12 <= b.length) {
+    const len = u32(b, o), type = asLatin(b.subarray(o + 4, o + 8));
+    if (!/^[A-Za-z]{4}$/.test(type) || o + 12 + len > b.length) { chunks.push({ off: o, type: '(corrupt)', len, ok: false }); break; }
+    const stored = u32(b, o + 8 + len), calc = crc32(b, o + 4, o + 8 + len);
+    const c = { off: o, type, len, ok: stored === calc, stored, calc };
+    if (type === 'IHDR') Object.assign(c, { w: u32(b, o + 8), h: u32(b, o + 12), depth: b[o + 16], color: b[o + 17] });
+    if (['tEXt', 'zTXt', 'iTXt'].includes(type)) c.text = safeText(b.subarray(o + 8, o + 8 + len), 400);
+    chunks.push(c); o += 12 + len;
+    if (type === 'IEND') break;
+  }
+  return { chunks, end: o };
+}
+function fixIHDR(b, ihdr){
+  // brute width/height so the IHDR CRC matches; returns patched copy
+  const buf = b.slice(ihdr.off + 4, ihdr.off + 4 + 17); // "IHDR" + 13 bytes
+  const target = ihdr.stored;
+  const set = (o, v) => { buf[o] = v >>> 24; buf[o + 1] = (v >>> 16) & 255; buf[o + 2] = (v >>> 8) & 255; buf[o + 3] = v & 255; };
+  for (let w = 1; w <= 4096; w++) { set(4, w); for (let h = 1; h <= 4096; h++) { set(8, h); if (crc32(buf) === target) { const out = b.slice(); out.set(buf, ihdr.off + 4); return { w, h, out }; } } }
+  return null;
+}
+function jpegInfo(b){
+  const segs = []; let i = 2;
+  while (i < b.length - 3) {
+    if (b[i] !== 0xff) break;
+    const m = b[i + 1]; if (m === 0xd8 || (m >= 0xd0 && m <= 0xd7)) { i += 2; continue; }
+    if (m === 0xd9) { segs.push({ off: i, m: 'EOI', len: 0 }); i += 2; break; }
+    const len = (b[i + 2] << 8) | b[i + 3];
+    const name = m === 0xda ? 'SOS' : m === 0xfe ? 'COM' : m >= 0xe0 && m <= 0xef ? 'APP' + (m - 0xe0) : m === 0xdb ? 'DQT' : m === 0xc4 ? 'DHT' : m === 0xc0 || m === 0xc2 ? 'SOF' + (m - 0xc0) : '0x' + m.toString(16);
+    const seg = { off: i, m: name, len };
+    if (m === 0xfe) seg.text = safeText(b.subarray(i + 4, i + 2 + len), 600);
+    if (m === 0xe1) seg.text = (asLatin(b.subarray(i + 4, i + 2 + len)).match(/[ -~]{4,}/g) || []).slice(0, 30).join(' | ');
+    if (m === 0xc0 || m === 0xc2) seg.dim = `${(b[i + 7] << 8) | b[i + 8]}×${(b[i + 5] << 8) | b[i + 6]}`;
+    segs.push(seg);
+    if (m === 0xda) { let j = i + 2 + len; while (j < b.length - 1 && !(b[j] === 0xff && b[j + 1] === 0xd9)) j++; segs.push({ off: j, m: 'EOI', len: 0 }); i = j + 2; break; }
+    i += 2 + len;
+  }
+  return { segs, end: i };
+}
+function zipInfo(b){
+  const eocd = lastIndexOfSeq(b, new Uint8Array([0x50, 0x4b, 0x05, 0x06])); if (eocd < 0) return null;
+  const le16 = o => b[o] | (b[o + 1] << 8), le32 = o => (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0;
+  const n = le16(eocd + 10), cdOff = le32(eocd + 16), clen = le16(eocd + 20);
+  const comment = safeText(b.subarray(eocd + 22, eocd + 22 + clen), 500);
+  const entries = []; let o = cdOff;
+  for (let k = 0; k < n && o + 46 <= b.length && le32(o) === 0x02014b50; k++) {
+    const flags = le16(o + 8), method = le16(o + 10), csize = le32(o + 20), usize = le32(o + 24), nl = le16(o + 28), el = le16(o + 30), cl = le16(o + 32);
+    entries.push({ name: tdUtf8.decode(b.subarray(o + 46, o + 46 + nl)), enc: !!(flags & 1), method: { 0: 'store', 8: 'deflate', 12: 'bzip2', 14: 'lzma', 99: 'AES' }[method] || method, csize, usize, crc: le32(o + 16).toString(16).padStart(8, '0'), comment: safeText(b.subarray(o + 46 + nl + el, o + 46 + nl + el + cl)) });
+    o += 46 + nl + el + cl;
+  }
+  return { entries, comment, end: eocd + 22 + clen };
+}
+function strings(b, min, utf16){
+  const out = []; let cur = '', start = 0;
+  if (!utf16) { for (let i = 0; i <= b.length; i++) { const x = b[i]; if (i < b.length && ((x >= 32 && x < 127) || x === 9)) { if (!cur) start = i; cur += String.fromCharCode(x); } else { if (cur.length >= min) out.push([start, cur]); cur = ''; } } }
+  else { for (let i = 0; i + 1 <= b.length; i += 2) { const x = b[i], y = b[i + 1]; if (i + 1 < b.length && y === 0 && x >= 32 && x < 127) { if (!cur) start = i; cur += String.fromCharCode(x); } else { if (cur.length >= min) out.push([start, cur]); cur = ''; } } }
+  return out;
+}
+
+/* ---------- render ---------- */
+const hexOff = n => '0x' + n.toString(16);
+function render(){
+  const b = F, types = detect(b), ent = entropy(b);
+  const emb = scanEmbedded(b).filter(e => e.off > 0);
+  const flagsFound = findFlags(asLatin(b));
+  let html = `<section class="panel"><div class="row" style="margin-top:0"><b class="mono" style="font-size:15px">${esc(NAME)}</b>
+    ${types.map(t => `<span class="b b-info">${esc(t.name)}${t.ext === 'riff' ? ' ' + esc(riffType(b, 0)) : ''}</span>`).join(' ') || '<span class="b b-mute">unknown type</span>'}
+    <span class="muted">${b.length.toLocaleString()} bytes · entropy ${ent.toFixed(3)} bits/byte ${ent > 7.5 ? '(compressed/encrypted)' : ent < 5 ? '(text-like / sparse)' : ''}</span></div>
+    ${flagsFound.length ? `<div style="margin-top:8px"><span class="b b-ok">flag-like strings in raw bytes</span> ${flagsFound.map(f => `<mark class="mono">${esc(f)}</mark>`).join(' ')}</div>` : ''}
+    <div class="note">First bytes: <span class="mono">${toHex(b.subarray(0, 16), ' ')}</span></div>
+    <canvas id="entc" height="60" style="width:100%;margin-top:8px;display:block"></canvas><div class="note" style="margin-top:2px">Entropy across the file (higher = compressed / encrypted regions).</div></section>`;
+
+  // embedded files
+  html += `<section class="panel"><h2>Embedded files <span class="muted" style="font-weight:400">(signature scan)</span></h2>${emb.length ? `<div class="tablewrap"><table><thead><tr><th>Offset</th><th>Type</th><th>Est. size</th><th></th></tr></thead><tbody>
+    ${emb.slice(0, 200).map((e, i) => { const end = carveEnd(b, e.off, e.ext); return `<tr><td class="mono">${e.off} <span class="muted">(${hexOff(e.off)})</span></td><td>${esc(e.name)}</td><td>${(end - e.off).toLocaleString()} B</td><td><button data-carve="${e.off}:${end}:${e.ext}" style="padding:2px 8px;font-size:12px">Extract</button></td></tr>`; }).join('')}</tbody></table></div>${emb.length > 200 ? `<p class="note">${emb.length - 200} more not shown.</p>` : ''}` : '<p class="muted" style="margin:0">No embedded file signatures found after offset 0.</p>'}</section>`;
+
+  // format specific
+  if (types.some(t => t.ext === 'png')) {
+    const p = pngInfo(b), ihdr = p.chunks.find(c => c.type === 'IHDR'), trailing = b.length - p.end;
+    html += `<section class="panel"><h2>PNG structure</h2>${ihdr ? `<p style="margin:0 0 8px">${ihdr.w} × ${ihdr.h}, bit depth ${ihdr.depth}, color type ${ihdr.color}</p>` : ''}
+      ${ihdr && !ihdr.ok ? `<div class="err" style="margin:0 0 8px">IHDR CRC mismatch — width/height were probably tampered with. <button id="fixIHDR">Brute-force correct dimensions</button> <span id="fixOut"></span></div>` : ''}
+      ${trailing > 0 ? `<div class="err" style="margin:0 0 8px">${trailing.toLocaleString()} bytes of data after IEND. <button data-carve="${p.end}:${b.length}:bin">Extract trailing data</button></div>` : ''}
+      <div class="tablewrap"><table><thead><tr><th>Offset</th><th>Chunk</th><th>Length</th><th>CRC</th><th>Content</th></tr></thead><tbody>
+      ${p.chunks.slice(0, 300).map(c => `<tr><td class="mono">${c.off}</td><td class="mono"><b>${esc(c.type)}</b></td><td>${c.len.toLocaleString()}</td><td>${c.ok ? '<span class="b b-ok">ok</span>' : `<span class="b b-bad">bad</span> <span class="mono muted" style="font-size:11px">${c.stored?.toString(16)} ≠ ${c.calc?.toString(16)}</span>`}</td><td class="mono" style="font-size:12px">${c.text ? hlFlags(c.text) : ''}</td></tr>`).join('')}</tbody></table></div></section>`;
+  }
+  if (types.some(t => t.ext === 'jpg')) {
+    const j = jpegInfo(b), trailing = b.length - j.end;
+    html += `<section class="panel"><h2>JPEG structure</h2>${trailing > 0 ? `<div class="err" style="margin:0 0 8px">${trailing.toLocaleString()} bytes after the end-of-image marker. <button data-carve="${j.end}:${b.length}:bin">Extract trailing data</button></div>` : ''}
+      <div class="tablewrap"><table><thead><tr><th>Offset</th><th>Marker</th><th>Length</th><th>Content</th></tr></thead><tbody>
+      ${j.segs.map(s => `<tr><td class="mono">${s.off}</td><td class="mono"><b>${s.m}</b></td><td>${s.len}</td><td class="mono" style="font-size:12px">${s.dim ? s.dim + ' ' : ''}${s.text ? hlFlags(s.text) : ''}</td></tr>`).join('')}</tbody></table></div>
+      <p class="note">Data hidden with steghide/outguess inside the image data isn't visible structurally — locally, try <span class="mono">steghide extract -sf file -p ""</span> or <span class="mono">stegseek</span>.</p></section>`;
+  }
+  if (types.some(t => t.ext === 'zip')) {
+    const z = zipInfo(b);
+    if (z) html += `<section class="panel"><h2>ZIP contents</h2>${z.comment ? `<p>Archive comment: <span class="mono">${hlFlags(z.comment)}</span></p>` : ''}
+      <div class="tablewrap"><table><thead><tr><th>Name</th><th>Size</th><th>Packed</th><th>Method</th><th>CRC32</th><th></th></tr></thead><tbody>
+      ${z.entries.map(e => `<tr><td class="mono">${esc(e.name)}${e.comment ? `<div class="muted">${esc(e.comment)}</div>` : ''}</td><td>${e.usize.toLocaleString()}</td><td>${e.csize.toLocaleString()}</td><td>${esc(e.method)}</td><td class="mono">${e.crc}</td><td>${e.enc ? '<span class="b b-warn">encrypted</span>' : ''}</td></tr>`).join('')}</tbody></table></div>
+      ${z.entries.some(e => e.enc) ? '<p class="note">Encrypted entries: tiny files (≤ 6 bytes) can be recovered from their CRC32; ZipCrypto with a known file enables a known-plaintext attack (bkcrack).</p>' : ''}
+      ${b.length > z.end ? `<div class="err">${(b.length - z.end).toLocaleString()} bytes after the end of the ZIP. <button data-carve="${z.end}:${b.length}:bin">Extract</button></div>` : ''}</section>`;
+  }
+
+  // strings + hex
+  html += `<section class="panel"><h2>Strings</h2><div class="row" style="margin-top:0"><label class="small" style="margin:0">Min length</label><input type="number" id="smin" value="6" min="3" max="50" style="width:70px">
+      <label class="chk"><input type="checkbox" id="s16"> UTF-16LE</label><input type="search" id="sq" class="grow" placeholder="Filter strings…"><button id="scp">Copy</button></div>
+      <pre id="sout" style="margin-top:8px;max-height:360px"></pre></section>
+    <section class="panel"><h2>Hex view</h2><div class="row" style="margin-top:0"><label class="small" style="margin:0">Offset</label><input type="text" id="hoff" class="mono" value="0" style="width:120px"><button id="hprev">◀</button><button id="hnext">▶</button><span class="muted">1 KiB per page · decimal or 0x hex</span></div>
+      <pre id="hout" style="margin-top:8px;font-size:12px"></pre></section>`;
+  $('#out').innerHTML = html;
+
+  // entropy graph
+  const cv = $('#entc'), ctx = cv.getContext('2d'); cv.width = cv.clientWidth * devicePixelRatio; cv.height = 60 * devicePixelRatio;
+  const blocks = Math.min(cv.width, Math.max(1, Math.ceil(b.length / 256))), bs = Math.ceil(b.length / blocks);
+  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--accent');
+  for (let i = 0; i < blocks; i++) { const e = entropy(b.subarray(i * bs, (i + 1) * bs)) / 8; const x = i * cv.width / blocks; ctx.fillRect(x, cv.height * (1 - e), Math.max(1, cv.width / blocks), cv.height * e); }
+
+  $$('[data-carve]').forEach(btn => btn.onclick = () => { const [s, e, ext] = btn.dataset.carve.split(':'); downloadBytes(`${NAME}_${s}.${ext}`, b.slice(+s, +e)); });
+  const fx = $('#fixIHDR'); if (fx) fx.onclick = async () => { fx.disabled = true; $('#fixOut').innerHTML = '<span class="spin"></span> searching up to 4096×4096…'; await sleep(20);
+    const ihdr = pngInfo(b).chunks.find(c => c.type === 'IHDR'); const r = fixIHDR(b, ihdr);
+    $('#fixOut').innerHTML = r ? `Found <b>${r.w} × ${r.h}</b> <button id="dlFix">Download fixed PNG</button>` : 'No match within 4096×4096 — the CRC itself may have been altered.';
+    if (r) $('#dlFix').onclick = () => downloadBytes(NAME.replace(/(\.png)?$/i, '_fixed.png'), r.out); };
+
+  let strs = [];
+  const drawStrings = () => { strs = strings(b, Math.max(3, +$('#smin').value || 6), $('#s16').checked); const q = $('#sq').value.toLowerCase(); const list = strs.filter(s => !q || s[1].toLowerCase().includes(q));
+    $('#sout').innerHTML = list.slice(0, 5000).map(([o, s]) => `<span class="muted">${o.toString(16).padStart(8, '0')}</span>  ${hlFlags(s)}`).join('\n') + (list.length > 5000 ? `\n… ${list.length - 5000} more` : '') || '(none)'; };
+  ['#smin', '#s16', '#sq'].forEach(s => $(s).addEventListener('input', drawStrings)); drawStrings();
+  $('#scp').onclick = e => copyText(strs.map(s => s[1]).join('\n'), e.target);
+  const drawHex = () => { let o = $('#hoff').value.trim(); o = /^0x/i.test(o) ? parseInt(o, 16) : parseInt(o) || 0; o = Math.max(0, Math.min(o, Math.max(0, b.length - 1))) & ~15; $('#hoff').value = o; $('#hout').textContent = hexdump(b, o, 1024); };
+  $('#hoff').addEventListener('change', drawHex); $('#hprev').onclick = () => { $('#hoff').value = Math.max(0, (+$('#hoff').value || 0) - 1024); drawHex(); }; $('#hnext').onclick = () => { $('#hoff').value = (+$('#hoff').value || 0) + 1024; drawHex(); }; drawHex();
+}
+
+async function load(f){ F = new Uint8Array(await f.arrayBuffer()); NAME = f.name; $('#out').innerHTML = '<section class="panel"><span class="spin"></span> Analyzing…</section>'; await sleep(10); render(); }
+$('#file').onchange = e => e.target.files[0] && load(e.target.files[0]);
+const dz = $('#drop');
+['dragover', 'dragenter'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.style.borderColor = 'var(--accent)'; }));
+['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.style.borderColor = ''; }));
+dz.addEventListener('drop', e => e.dataTransfer.files[0] && load(e.dataTransfer.files[0]));
+</script>

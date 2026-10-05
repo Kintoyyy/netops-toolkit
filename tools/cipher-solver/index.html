@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Classical Cipher Solver · NetOps Toolkit</title>
+<meta name="description" content="Caesar brute force, Vigenère auto-crack, Affine, Rail fence, Atbash, ROT47, Bacon, Polybius, Morse and A1Z26 — with frequency analysis and Index of Coincidence.">
+<link rel="stylesheet" href="../../assets/style.css">
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="../../">← All tools</a>
+  <header class="top">
+    <div><h1>Classical Cipher Solver</h1><p class="sub">Caesar brute force, Vigenère auto-crack, Affine, Rail fence, Atbash, ROT47, Bacon, Polybius, Morse and A1Z26 — with frequency analysis and Index of Coincidence.</p></div>
+    <button id="themeBtn" title="Toggle theme"></button>
+  </header>
+<script src="../../assets/common.js"></script>
+<script src="../../assets/decoders.js"></script>
+<section class="panel">
+  <div class="chips" id="ciphers"></div>
+  <div class="grid2" style="margin-top:12px">
+    <div>
+      <label class="small" for="in">Input</label>
+      <textarea id="in" spellcheck="false" style="min-height:160px"></textarea>
+      <div class="row" id="opts"></div>
+    </div>
+    <div>
+      <label class="small">Text statistics</label>
+      <div id="stats" class="card" style="min-height:160px"></div>
+    </div>
+  </div>
+</section>
+<div id="out"></div>
+
+<script>
+const EN = [8.17,1.49,2.78,4.25,12.7,2.23,2.02,6.09,6.97,.15,.77,4.03,2.41,6.75,7.51,1.93,.1,5.99,6.33,9.06,2.76,.98,2.36,.15,1.97,.07].map(x => x / 100);
+const lettersOf = s => [...s.toUpperCase()].filter(c => c >= 'A' && c <= 'Z').map(c => c.charCodeAt(0) - 65);
+const ioc = arr => { if (arr.length < 2) return 0; const f = Array(26).fill(0); arr.forEach(x => f[x]++); return f.reduce((a, x) => a + x * (x - 1), 0) / (arr.length * (arr.length - 1)); };
+const shiftChar = (c, k) => { const b = c <= 'Z' ? 65 : 97; return String.fromCharCode(((c.charCodeAt(0) - b + k) % 26 + 26) % 26 + b); };
+const gcd = (a, b) => b ? gcd(b, a % b) : a;
+const inv26 = a => { for (let x = 1; x < 26; x++) if ((a * x) % 26 === 1) return x; return null; };
+
+function vigenere(text, key, dec){
+  const k = lettersOf(key); if (!k.length) return text; let i = 0;
+  return text.replace(/[a-z]/gi, c => shiftChar(c, (dec ? -1 : 1) * k[i++ % k.length]));
+}
+function vigCrack(text){
+  const L = lettersOf(text), res = [];
+  for (let len = 1; len <= Math.min(24, Math.floor(L.length / 3)); len++) {
+    const cols = Array.from({ length: len }, (_, i) => L.filter((_, j) => j % len === i));
+    const avgIoc = cols.reduce((a, c) => a + ioc(c), 0) / len;
+    // per column: shift maximizing correlation with English letter frequencies (stabler than χ² on short columns)
+    const shifts = cols.map(col => { const f = Array(26).fill(0); col.forEach(x => f[x]++); let best = 0, bs = -1;
+      for (let s = 0; s < 26; s++) { let v = 0; for (let i = 0; i < 26; i++) v += f[(i + s) % 26] * EN[i]; if (v > bs) { bs = v; best = s; } } return best; });
+    // refinement: re-pick each key letter by the score of the whole decryption
+    const keyStr = () => shifts.map(x => String.fromCharCode(65 + x)).join('');
+    if (len <= 16) for (let pass = 0; pass < 2; pass++) for (let i = 0; i < len; i++) {
+      let best = shifts[i], bs = -Infinity;
+      for (let s = 0; s < 26; s++) { shifts[i] = s; const v = englishScore(vigenere(text, keyStr(), true)); if (v > bs) { bs = v; best = s; } }
+      shifts[i] = best;
+    }
+    res.push({ len, avgIoc, key: keyStr() });
+  }
+  // collapse repeated keys (KEYKEY → KEY), score each decryption, prefer the shorter key when scores are close
+  const seen = new Set(), cands = [];
+  for (const r of res) {
+    let key = r.key; for (let p = 1; p < key.length; p++) if (key.length % p === 0 && key.slice(0, p).repeat(key.length / p) === key) { key = key.slice(0, p); break; }
+    if (seen.has(key)) continue; seen.add(key);
+    const plain = vigenere(text, key, true);
+    cands.push({ ...r, key, len: key.length, plain, score: englishScore(plain) });
+  }
+  cands.sort((a, b) => b.score - a.score);
+  const best = cands[0];
+  const shorter = cands.filter(c => best.len % c.len === 0 && c.len < best.len && c.score >= best.score * 0.9).sort((a, b) => a.len - b.len)[0];
+  if (shorter) cands.unshift(cands.splice(cands.indexOf(shorter), 1)[0]);
+  return cands.slice(0, 5);
+}
+function railDecode(ct, rails, offset = 0){
+  const n = ct.length, cycle = 2 * (rails - 1); if (rails < 2 || n === 0) return ct;
+  const railOf = i => { const p = (i + offset) % cycle; return p < rails ? p : cycle - p; };
+  const counts = Array(rails).fill(0); for (let i = 0; i < n; i++) counts[railOf(i)]++;
+  const rows = []; let pos = 0; for (let r = 0; r < rails; r++) { rows.push(ct.slice(pos, pos + counts[r]).split('')); pos += counts[r]; }
+  let out = ''; for (let i = 0; i < n; i++) out += rows[railOf(i)].shift(); return out;
+}
+function railEncode(pt, rails){ if (rails < 2) return pt; const cycle = 2 * (rails - 1), rows = Array.from({ length: rails }, () => ''); [...pt].forEach((c, i) => { const p = i % cycle; rows[p < rails ? p : cycle - p] += c; }); return rows.join(''); }
+function bacon(s){
+  let t = s.replace(/[^abAB01]/g, '');
+  if (/^[01]+$/.test(t)) t = t.replace(/0/g, 'A').replace(/1/g, 'B');
+  t = t.toUpperCase();
+  const groups = t.match(/.{5}/g) || [];
+  const v24 = 'ABCDEFGHIKLMNOPQRSTUWXYZ', v26 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const val = g => parseInt(g.replace(/A/g, '0').replace(/B/g, '1'), 2);
+  return { v26: groups.map(g => v26[val(g)] ?? '?').join(''), v24: groups.map(g => v24[val(g)] ?? '?').join('') };
+}
+function baconFromCase(s){ return [...s].filter(c => /[a-z]/i.test(c)).map(c => c === c.toUpperCase() ? 'B' : 'A').join(''); }
+function polybius(s, alpha = 'ABCDEFGHIKLMNOPQRSTUVWXYZ'){
+  const d = s.replace(/[^1-5]/g, ''); return (d.match(/../g) || []).map(p => alpha[(p[0] - 1) * 5 + (p[1] - 1)] ?? '?').join('');
+}
+const MORSE_ENC = Object.fromEntries(Object.entries(MORSE).map(([k, v]) => [v, k]));
+
+/* ---------- UI ---------- */
+const row = (label, text, extra = '') => `<tr><td style="white-space:nowrap">${label}</td><td class="mono" style="white-space:pre-wrap;font-size:12.5px">${hlFlags(text)}</td><td>${extra}<button class="cpy" data-t="${esc(text)}" style="padding:2px 8px;font-size:12px">Copy</button></td></tr>`;
+const table = rows => `<section class="panel"><div class="tablewrap"><table><tbody>${rows.join('')}</tbody></table></div></section>`;
+const scoreBadge = s => `<span class="b ${s > 6 ? 'b-ok' : s > 4 ? 'b-warn' : 'b-mute'}" title="English score">${s.toFixed(1)}</span> `;
+
+const CIPHERS = {
+  'Caesar (brute)': { run: t => { const r = Array.from({ length: 25 }, (_, i) => ({ k: i + 1, p: rot(t, -(i + 1)) })).map(x => ({ ...x, s: englishScore(x.p) })).sort((a, b) => b.s - a.s); return table(r.map((x, i) => row(`${scoreBadge(x.s)}shift ${x.k}${i === 0 ? ' <span class="b b-ok">best</span>' : ''}`, x.p))); } },
+  'Vigenère': { opts: '<input type="text" id="key" class="mono" placeholder="Key (leave empty to auto-crack)" style="width:240px"><select id="mode"><option value="dec">Decrypt</option><option value="enc">Encrypt</option></select>',
+    run: t => { const key = $('#key').value.trim(); if (key) return table([row(`key <b class="mono">${esc(key)}</b>`, vigenere(t, key, $('#mode').value === 'dec'))]);
+      if (lettersOf(t).length < 20) return '<div class="err">Auto-crack needs at least ~20 letters (ideally 100+). Or enter the key.</div>';
+      return `<section class="panel"><p class="muted" style="margin:0 0 8px">Key length by Index of Coincidence, each column solved by χ² against English letter frequencies. Longer ciphertext = better results.</p><div class="tablewrap"><table><tbody>${vigCrack(t).map((r, i) => row(`len ${r.len} · IoC ${r.avgIoc.toFixed(3)}<br>key <b class="mono">${esc(r.key)}</b>${i === 0 ? ' <span class="b b-ok">best</span>' : ''}`, r.plain)).join('')}</tbody></table></div></section>`; } },
+  'Affine (brute)': { run: t => { const r = []; for (let a = 1; a < 26; a += 2) { if (a === 13) continue; const ai = inv26(a); for (let b = 0; b < 26; b++) { const p = t.replace(/[a-z]/gi, c => { const base = c <= 'Z' ? 65 : 97; return String.fromCharCode(((ai * ((c.charCodeAt(0) - base) - b)) % 26 + 26) % 26 + base); }); r.push({ a, b, p, s: englishScore(p) }); } }
+    r.sort((x, y) => y.s - x.s); return table(r.slice(0, 12).map((x, i) => row(`${scoreBadge(x.s)}a=${x.a}, b=${x.b}${i === 0 ? ' <span class="b b-ok">best</span>' : ''}`, x.p))); } },
+  'Rail fence (brute)': { opts: '<label class="chk"><input type="checkbox" id="railOff"> Also try offsets</label><input type="number" id="railEnc" min="2" max="30" placeholder="Encode with N rails" style="width:170px">',
+    run: t => { const n = +$('#railEnc').value; if (n >= 2) return table([row(`encode, ${n} rails`, railEncode(t, n))]);
+      const r = []; for (let k = 2; k <= Math.min(20, t.length); k++) for (let o = 0; o < ($('#railOff').checked ? 2 * (k - 1) : 1); o++) { const p = railDecode(t, k, o); r.push({ k, o, p, s: englishScore(p) }); }
+      r.sort((a, b) => b.s - a.s); return table(r.slice(0, 12).map((x, i) => row(`${scoreBadge(x.s)}${x.k} rails${x.o ? `, offset ${x.o}` : ''}${i === 0 ? ' <span class="b b-ok">best</span>' : ''}`, x.p))); } },
+  'Atbash': { run: t => table([row('Atbash', atbash(t))]) },
+  'ROT47': { run: t => table([row('ROT47', rot47(t))]) },
+  'Bacon': { run: t => { const direct = /^[\sabAB01]+$/.test(t); const src = direct ? t : baconFromCase(t); const r = bacon(src);
+      return table([...(direct ? [] : [row('A/B from letter case', src)]), row('26-letter', r.v26), row('24-letter (I=J, U=V)', r.v24)]); } },
+  'Polybius': { opts: '<input type="text" id="poly" class="mono" value="ABCDEFGHIKLMNOPQRSTUVWXYZ" style="width:280px" title="25-letter square, row by row">',
+    run: t => table([row('Polybius 5×5', polybius(t, ($('#poly').value.toUpperCase() + 'ABCDEFGHIKLMNOPQRSTUVWXYZ').replace(/J/g, 'I').split('').filter((c, i, a) => /[A-Z]/.test(c) && a.indexOf(c) === i).join('').slice(0, 25)))]) },
+  'Morse': { run: t => /^[.\-\s\/|·•_–—]+$/.test(t.trim()) ? table([row('Decoded', morseDecode(t))])
+      : table([row('Encoded', t.toUpperCase().split(/\s+/).map(w => [...w].map(c => MORSE_ENC[c] ?? '?').join(' ')).join(' / '))]) },
+  'A1Z26': { run: t => /^[\d\s,.\-]+$/.test(t.trim()) ? table([row('Numbers → letters', t.trim().split(/[\s,.]+/).map(w => w.split('-').map(n => String.fromCharCode(64 + (+n)) ).join('')).join(' '))])
+      : table([row('Letters → numbers', t.split(/\s+/).map(w => lettersOf(w).map(x => x + 1).join('-')).join(' '))]) },
+};
+let cur = 'Caesar (brute)';
+$('#ciphers').innerHTML = Object.keys(CIPHERS).map(k => `<span class="chip ${k === cur ? 'on' : ''}" data-c="${esc(k)}">${esc(k)}</span>`).join('');
+$('#ciphers').onclick = e => { const c = e.target.closest('.chip'); if (!c) return; cur = c.dataset.c; $$('#ciphers .chip').forEach(x => x.classList.toggle('on', x === c)); $('#opts').innerHTML = CIPHERS[cur].opts || ''; $$('#opts input,#opts select').forEach(el => el.addEventListener('input', go)); go(); };
+
+function stats(t){
+  const L = lettersOf(t), f = Array(26).fill(0); L.forEach(x => f[x]++);
+  const ic = ioc(L), max = Math.max(1, ...f);
+  const verdict = L.length < 30 ? 'too short to judge' : ic > 0.058 ? 'monoalphabetic / transposition likely (English ≈ 0.066)' : ic > 0.045 ? 'unclear' : 'polyalphabetic (Vigenère-like) or random (≈ 0.038)';
+  $('#stats').innerHTML = `<div class="kv" style="margin-bottom:8px"><div>Characters</div><div>${t.length}</div><div>Letters</div><div>${L.length}</div><div>Index of Coincidence</div><div>${ic.toFixed(4)} <span class="muted" style="font-family:system-ui">— ${verdict}</span></div></div>
+    <div style="display:flex;align-items:flex-end;gap:2px;height:70px">${f.map((c, i) => `<div title="${String.fromCharCode(65 + i)}: ${c}" style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%"><div style="width:100%;background:var(--accent);opacity:.8;border-radius:2px 2px 0 0;height:${(c / max) * 56}px"></div><span style="font-size:9px;color:var(--muted)">${String.fromCharCode(65 + i)}</span></div>`).join('')}</div>`;
+}
+function go(){
+  const t = $('#in').value; stats(t);
+  if (!t.trim()) { $('#out').innerHTML = ''; return; }
+  $('#out').innerHTML = CIPHERS[cur].run(t);
+  $$('.cpy').forEach(b => b.onclick = () => copyText(b.dataset.t, b));
+}
+$('#in').addEventListener('input', go);
+go();
+</script>
+
+</div>
+</body>
+</html>

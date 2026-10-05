@@ -1,0 +1,120 @@
+<!-- title: XOR Cracker | desc: XOR with any key, brute-force single-byte keys, recover repeating keys by Hamming distance, and derive the key from known plaintext like “flag{”. | js: decoders -->
+<section class="panel">
+  <div class="row" style="margin-top:0">
+    <label class="small" style="margin:0">Ciphertext format</label>
+    <select id="fmt"><option value="hex">Hex</option><option value="base64">Base64</option><option value="text">Text</option><option value="dec">Decimal bytes</option><option value="bin">Binary</option></select>
+    <label class="btn" for="file">Load file…</label><input type="file" id="file">
+    <span class="muted" id="info"></span>
+    <span style="flex:1"></span>
+    <label class="small" style="margin:0">Flag regex</label><input type="text" id="flagre" class="mono" style="width:240px">
+  </div>
+  <textarea id="in" spellcheck="false" style="min-height:120px;margin-top:8px" placeholder="1b37373331363f78151b7f2b783431333d78397828372d363c78373e783a393b3736"></textarea>
+</section>
+
+<div class="grid2">
+  <section class="panel">
+    <h2>XOR with a key</h2>
+    <div class="row" style="margin-top:0">
+      <input type="text" id="key" class="grow mono" placeholder="key">
+      <select id="kfmt"><option value="text">Text key</option><option value="hex">Hex key</option></select>
+      <button class="primary" id="apply">Apply</button>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <input type="text" id="known" class="grow mono" placeholder="Known plaintext, e.g. flag{  or  CTF{" value="flag{">
+      <button id="kp">Derive key</button>
+    </div>
+    <p class="note">Known-plaintext tries every offset and shows key fragments that look like readable text or repeat.</p>
+  </section>
+  <section class="panel">
+    <h2>Automatic attacks</h2>
+    <div class="row" style="margin-top:0"><button class="primary" id="single">Single-byte brute force</button><button id="multi">Repeating-key crack</button></div>
+    <p class="note">Single-byte tries all 256 keys. Repeating-key estimates the key length with normalized Hamming distance (2–40), then solves each column as single-byte XOR. Needs a few dozen bytes per key byte.</p>
+  </section>
+</div>
+<div id="out"></div>
+
+<script>
+let data = null, fileName = null;
+function getData(){
+  if (fileName && data) return data;
+  const s = $('#in').value; if (!s.trim()) throw new Error('Enter ciphertext first');
+  return parseBytes($('#fmt').value === 'text' ? s : s.trim(), $('#fmt').value);
+}
+const xorBytes = (d, k) => d.map((b, i) => b ^ k[i % k.length]);
+const keyBytes = () => $('#kfmt').value === 'hex' ? hexToBytes($('#key').value) : te.encode($('#key').value);
+const fmtKey = k => `<span class="mono">${esc(safeText(k))}</span> <span class="muted mono" style="font-size:11px">0x${toHex(k)}</span>`;
+function resultRow(label, out){
+  const txt = printableRatio(out) > 0.85;
+  return `<tr><td style="white-space:nowrap">${label}</td><td class="mono" style="font-size:12px;white-space:pre-wrap">${txt ? hlFlags(asLatin(out).slice(0, 800)) : esc(hexdump(out, 0, 96))}</td></tr>`;
+}
+function show(title, rows, note = ''){
+  $('#out').innerHTML = `<section class="panel"><h2>${title}</h2>${note}<div class="tablewrap"><table><tbody>${rows.join('')}</tbody></table></div></section>`;
+}
+function fail(e){ $('#out').innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+function updateInfo(){ try { const d = getData(); $('#info').textContent = `${d.length} bytes · entropy ${entropy(d).toFixed(2)}`; } catch { $('#info').textContent = ''; } }
+
+function singleByte(d, scorer = bytesScore){
+  const r = []; for (let k = 0; k < 256; k++) { const o = d.map(b => b ^ k); r.push({ k, o, s: scorer(o) }); }
+  return r.sort((a, b) => b.s - a.s);
+}
+const hamming = (a, b) => { let n = 0; for (let i = 0; i < a.length; i++) { let x = a[i] ^ b[i]; while (x) { n += x & 1; x >>= 1; } } return n; };
+
+$('#apply').onclick = () => { try {
+  const d = getData(), k = keyBytes(); if (!k.length) throw new Error('Enter a key');
+  const out = xorBytes(d, k); window._last = out;
+  show('Result', [resultRow(fmtKey(k), out)], `<div class="row" style="margin-top:0;margin-bottom:8px"><button id="dl">Download result</button><button id="cpHex">Copy as hex</button><button id="cpTxt">Copy as text</button></div>`);
+  $('#dl').onclick = () => downloadBytes('xored.bin', out); $('#cpHex').onclick = e => copyText(toHex(out), e.target); $('#cpTxt').onclick = e => copyText(asLatin(out), e.target);
+} catch (e) { fail(e); } };
+
+$('#single').onclick = () => { try {
+  const r = singleByte(getData());
+  show('Single-byte XOR — top 12 by English score', r.slice(0, 12).map((x, i) => resultRow(`key 0x${x.k.toString(16).padStart(2, '0')} ${x.k >= 32 && x.k < 127 ? `(“${esc(String.fromCharCode(x.k))}”)` : ''}${i === 0 ? ' <span class="b b-ok">best</span>' : ''}`, x.o)));
+} catch (e) { fail(e); } };
+
+$('#multi').onclick = () => { try {
+  const d = getData();
+  if (d.length < 8) throw new Error('Too little data for repeating-key analysis');
+  const sizes = [];
+  for (let ks = 2; ks <= Math.min(40, Math.floor(d.length / 2)); ks++) {
+    const blocks = Math.min(40, Math.floor(d.length / ks) - 1); if (blocks < 1) break;
+    let dist = 0; for (let i = 0; i < blocks; i++) dist += hamming(d.subarray(i * ks, (i + 1) * ks), d.subarray((i + 1) * ks, (i + 2) * ks)) / ks;
+    sizes.push({ ks, dist: dist / blocks });
+  }
+  sizes.sort((a, b) => a.dist - b.dist);
+  const cands = sizes.slice(0, 8).map(({ ks, dist }) => {
+    const key = new Uint8Array(ks);
+    for (let i = 0; i < ks; i++) { const col = d.filter((_, j) => j % ks === i); key[i] = singleByte(col, charScore)[0].k; }
+    // shrink key if it is a repetition of a shorter key
+    let k = key; for (let p = 1; p < ks; p++) if (ks % p === 0 && key.every((b, i) => b === key[i % p])) { k = key.slice(0, p); break; }
+    const out = xorBytes(d, k);
+    return { k, dist, out, s: bytesScore(out) };
+  }).sort((a, b) => b.s - a.s).filter((c, i, a) => a.findIndex(x => toHex(x.k) === toHex(c.k)) === i);
+  const shorter = cands.filter(c => cands[0].k.length % c.k.length === 0 && c.k.length < cands[0].k.length && c.s >= cands[0].s * 0.9).sort((a, b) => a.k.length - b.k.length)[0];
+  if (shorter) cands.unshift(cands.splice(cands.indexOf(shorter), 1)[0]);
+  show('Repeating-key XOR — candidates', cands.map((c, i) => resultRow(`key ${fmtKey(c.k)}<br><span class="muted" style="font-size:11px">len ${c.k.length} · hamming ${c.dist.toFixed(2)}</span>${i === 0 ? ' <span class="b b-ok">best</span>' : ''}`, c.out)));
+} catch (e) { fail(e); } };
+
+$('#kp').onclick = () => { try {
+  const d = getData(), p = te.encode($('#known').value); if (!p.length) throw new Error('Enter known plaintext');
+  const rows = [];
+  for (let off = 0; off + p.length <= d.length && off < 4096; off++) {
+    const frag = p.map((b, i) => b ^ d[off + i]);
+    const pr = printableRatio(frag);
+    // detect a repeating period inside the fragment (key shorter than known text)
+    let period = 0; for (let q = 1; q < frag.length; q++) if (frag.every((b, i) => i < q || b === frag[i - q])) { period = q; break; }
+    if (off === 0 || pr === 1 || period) rows.push({ off, frag, pr, period });
+  }
+  rows.sort((a, b) => (b.off === 0) - (a.off === 0) || (b.period > 0) - (a.period > 0) || b.pr - a.pr);
+  show('Key fragments from known plaintext', rows.slice(0, 20).map(r => {
+    const key = r.period ? r.frag.slice(0, r.period) : r.frag;
+    const rot = r.period ? new Uint8Array(key.length).map((_, i) => key[((i - r.off) % key.length + key.length) % key.length]) : null;
+    const preview = rot ? xorBytes(d, rot) : null;
+    return `<tr><td style="white-space:nowrap">offset ${r.off}${r.period ? ` <span class="b b-ok">repeats every ${r.period}</span>` : ''}</td><td>${fmtKey(r.frag)}${rot ? `<div style="margin-top:4px">full key ${fmtKey(rot)} <button data-k="${toHex(rot)}" style="padding:2px 8px;font-size:12px">Use</button></div><div class="mono" style="font-size:12px;margin-top:4px;white-space:pre-wrap">${hlFlags(safeText(preview, 300))}</div>` : ''}</td></tr>`;
+  }), '<p class="note" style="margin-top:0">If the key is shorter than your known text, it shows up as a repeating pattern — click “Use” to apply it.</p>');
+  $$('[data-k]').forEach(b => b.onclick = () => { $('#kfmt').value = 'hex'; $('#key').value = b.dataset.k; $('#apply').click(); });
+} catch (e) { fail(e); } };
+
+$('#file').onchange = async e => { const f = e.target.files[0]; if (!f) return; data = new Uint8Array(await f.arrayBuffer()); fileName = f.name; $('#in').value = `[file loaded: ${f.name}] — clear this box to type input instead`; $('#in').disabled = true; updateInfo(); e.target.value = '';
+  $('#in').insertAdjacentHTML('afterend', '<button id="unload" style="margin-top:6px">Unload file</button>'); $('#unload').onclick = () => { data = fileName = null; $('#in').disabled = false; $('#in').value = ''; $('#unload').remove(); updateInfo(); }; };
+$('#in').addEventListener('input', updateInfo); $('#fmt').addEventListener('change', updateInfo);
+</script>
