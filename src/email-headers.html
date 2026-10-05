@@ -1,0 +1,148 @@
+<!-- title: Email Header Analyzer | desc: Paste raw email headers to trace the delivery path, see SPF/DKIM/DMARC verdicts, hop delays and phishing red flags. Fully offline. -->
+<section class="panel">
+  <label class="small" for="raw">Raw headers (Gmail: ⋮ → Show original · Outlook: File → Properties → Internet headers)</label>
+  <textarea id="raw" spellcheck="false" style="min-height:200px" placeholder="Received: from mail.example.com ..."></textarea>
+  <div class="row"><button class="primary" id="go">Analyze</button><button id="sample">Load sample</button><button id="clear">Clear</button></div>
+</section>
+<div id="out"></div>
+
+<script>
+function unfold(raw){
+  raw = raw.replace(/\r\n?/g, '\n').replace(/^\s+/, '');
+  const blank = raw.search(/\n[ \t]*\n/); if (blank > 0) raw = raw.slice(0, blank);
+  const out = [];
+  for (const l of raw.split('\n')) {
+    if (/^[ \t]/.test(l) && out.length) out[out.length - 1].v += ' ' + l.trim();
+    else { const m = l.match(/^([!-9;-~]+):[ \t]?(.*)$/); if (m) out.push({ k: m[1], v: m[2].trim() }); }
+  }
+  return out;
+}
+function decodeMime(s){
+  return String(s || '').replace(/=\?([^?]+)\?([bqBQ])\?([^?]*)\?=(?:\s+(?==\?))?/g, (m, cs, enc, txt) => {
+    try {
+      let bytes;
+      if (enc.toUpperCase() === 'B') bytes = Uint8Array.from(atob(txt), c => c.charCodeAt(0));
+      else { const t = txt.replace(/_/g, ' '), a = []; for (let i = 0; i < t.length; i++) { if (t[i] === '=' && /^[0-9a-f]{2}$/i.test(t.substr(i + 1, 2))) { a.push(parseInt(t.substr(i + 1, 2), 16)); i += 2; } else a.push(t.charCodeAt(i)); } bytes = new Uint8Array(a); }
+      return new TextDecoder(cs).decode(bytes);
+    } catch { return m; }
+  });
+}
+function addr(v){
+  if (!v) return null;
+  const s = decodeMime(v);
+  const angles = [...s.matchAll(/<([^<>]+)>/g)];
+  const last = angles.at(-1);
+  const bare = s.match(/([^\s<>"]+@[^\s<>"]+)/);
+  const email = last ? last[1].trim().toLowerCase() : bare ? bare[1].toLowerCase() : null;
+  const display = (last ? s.slice(0, last.index) : '').replace(/"/g, '').trim();
+  return { raw: s, email, display: display && display !== email ? display : '', domain: email?.split('@')[1] || null };
+}
+const orgDom = d => d ? d.split('.').slice(-2).join('.') : null;   // rough organisational domain
+function parseReceived(v){
+  const semi = v.lastIndexOf(';');
+  const date = semi >= 0 ? v.slice(semi + 1).trim() : '';
+  const body = semi >= 0 ? v.slice(0, semi) : v;
+  const grab = re => (body.match(re) || [])[1]?.trim();
+  const from = grab(/\bfrom\s+(.+?)(?=\s+by\s|\s+with\s|\s+id\s|\s+for\s|$)/i);
+  const by = grab(/\bby\s+(.+?)(?=\s+with\s|\s+id\s|\s+for\s|\s+via\s|\s+\(|$)/i);
+  const proto = grab(/\bwith\s+([A-Za-z0-9-]+)/i);
+  const v4 = (body.match(/(?<![\d.])(?:0|[1-9]\d{0,2})(?:\.(?:0|[1-9]\d{0,2})){3}(?![\d.])/g) || []).filter(ip => parseIPv4(ip) != null);
+  const v6 = (body.match(/\[(?:IPv6:)?([0-9a-f:]{3,}[0-9a-f.:]*)\]/gi) || []).map(x => x.replace(/^\[(IPv6:)?|\]$/gi, '')).filter(ip => parseIPv6(ip) != null);
+  const t = Date.parse(date.replace(/\s*\([^)]*\)\s*$/, ''));
+  return { from, by, proto, date, time: isNaN(t) ? null : t, ips: [...new Set([...v4, ...v6])] };
+}
+const isPublic = ip => ipKind(ip) === 4 ? !v4Special(parseIPv4(ip)) : v6Special(parseIPv6(ip)) === 'Global unicast';
+const fmtDelay = ms => ms == null ? '—' : ms < 0 ? `${Math.round(ms / 1000)}s (clock skew)` : ms < 60e3 ? `${Math.round(ms / 1000)}s` : ms < 3600e3 ? `${Math.round(ms / 60e3)}m` : `${(ms / 3600e3).toFixed(1)}h`;
+const verdictCls = v => !v ? 'mute' : /^pass$/i.test(v) ? 'ok' : /^(fail|permerror|hardfail)$/i.test(v) ? 'bad' : /^(softfail|neutral|none|temperror|policy)$/i.test(v) ? 'warn' : 'info';
+
+function analyze(){
+  const H = unfold($('#raw').value);
+  if (!H.length) { $('#out').innerHTML = '<div class="err">No headers found. Paste the raw header block (lines like “Received: …”).</div>'; return; }
+  const get = k => H.find(h => h.k.toLowerCase() === k)?.v;
+  const all = k => H.filter(h => h.k.toLowerCase() === k).map(h => h.v);
+
+  const from = addr(get('from')), rp = addr(get('return-path')), rt = addr(get('reply-to')), to = decodeMime(get('to') || '');
+  const subject = decodeMime(get('subject') || ''), msgid = get('message-id') || '';
+  const ar = all('authentication-results')[0] || all('arc-authentication-results')[0] || '';
+  const pick = (re) => (ar.match(re) || [])[1];
+  const spf = pick(/\bspf=(\w+)/i) || (get('received-spf') || '').split(/\s/)[0] || null;
+  const dkim = pick(/\bdkim=(\w+)/i), dmarc = pick(/\bdmarc=(\w+)/i), compauth = pick(/\bcompauth=(\w+)/i);
+  const dkimSigs = all('dkim-signature').map(v => ({ d: (v.match(/\bd=([^;\s]+)/) || [])[1], s: (v.match(/\bs=([^;\s]+)/) || [])[1] }));
+  const hops = all('received').map(parseReceived).reverse();
+  hops.forEach((h, i) => h.delay = i && h.time && hops[i - 1].time ? h.time - hops[i - 1].time : null);
+  const totalDelay = hops.length > 1 && hops[0].time && hops.at(-1).time ? hops.at(-1).time - hops[0].time : null;
+  const origin = hops.flatMap(h => h.ips).find(isPublic) || get('x-originating-ip')?.replace(/[\[\]]/g, '');
+
+  const flags = [];
+  const F = (lvl, t) => flags.push([lvl, t]);
+  if (/^(fail|permerror)$/i.test(dmarc || '')) F('bad', 'DMARC failed — From domain is not authenticated');
+  if (/^fail$/i.test(spf || '')) F('bad', 'SPF failed — sending server not authorized by envelope domain');
+  if (/^softfail$/i.test(spf || '')) F('warn', 'SPF softfail');
+  if (/^fail$/i.test(dkim || '')) F('bad', 'DKIM signature failed verification');
+  if (!ar) F('warn', 'No Authentication-Results header — verdicts unknown');
+  if (from?.display && /@/.test(from.display)) { const disp = from.display.match(/[\w.+-]+@[\w.-]+/)?.[0]?.toLowerCase(); if (disp && disp !== from.email) F('bad', `Display name shows “${disp}” but real sender is ${from.email}`); }
+  if (rt?.domain && from?.domain && orgDom(rt.domain) !== orgDom(from.domain)) F('warn', `Reply-To goes to a different domain (${rt.domain}) — replies won't reach ${from.domain}`);
+  if (rp?.domain && from?.domain && orgDom(rp.domain) !== orgDom(from.domain)) F('info', `Envelope sender (Return-Path) domain ${rp.domain} differs from From — normal for mailing services, suspicious otherwise`);
+  if (dkimSigs.length && from?.domain && !dkimSigs.some(s => s.d && orgDom(s.d) === orgDom(from.domain))) F('warn', `No DKIM signature aligned with ${from.domain} (signed by ${dkimSigs.map(s => s.d).join(', ')})`);
+  if (!dkimSigs.length) F('info', 'Message is not DKIM-signed');
+  const mid = (msgid.match(/@([^>]+)>/) || [])[1];
+  if (mid && from?.domain && orgDom(mid) !== orgDom(from.domain)) F('info', `Message-ID generated by ${mid}`);
+  if (from?.domain && /^xn--|\.xn--/.test(from.domain)) F('bad', `From domain uses punycode (${from.domain}) — check for lookalike`);
+  if (totalDelay != null && totalDelay > 3600e3) F('info', `Delivery took ${fmtDelay(totalDelay)}`);
+
+  const lnk = ip => `<a class="mono" href="../domain-intel/?q=${encodeURIComponent(ip)}">${esc(ip)}</a>`;
+  const kv = o => `<div class="kv">${Object.entries(o).filter(([, v]) => v).map(([k, v]) => `<div>${k}</div><div>${v}</div>`).join('')}</div>`;
+  const fmtAddr = a => a ? `${a.display ? esc(a.display) + ' ' : ''}&lt;${esc(a.email || a.raw)}&gt;` : '';
+
+  $('#out').innerHTML = `
+  <section class="panel">
+    <div class="row" style="margin-top:0">
+      ${[['SPF', spf], ['DKIM', dkim], ['DMARC', dmarc], ...(compauth ? [['CompAuth', compauth]] : [])].map(([n, v]) => `<span class="card" style="padding:8px 12px">${n} <span class="b b-${verdictCls(v)}">${esc(v || 'n/a')}</span></span>`).join('')}
+      ${origin ? `<span class="card" style="padding:8px 12px">Origin IP ${lnk(origin)}</span>` : ''}
+      ${totalDelay != null ? `<span class="card" style="padding:8px 12px">Total transit <b>${fmtDelay(totalDelay)}</b></span>` : ''}
+    </div>
+    <div class="grid2" style="margin-top:14px">
+      <div><h2>Key headers</h2>${kv({ Subject: esc(subject), From: fmtAddr(from), 'Reply-To': fmtAddr(rt), 'Return-Path': fmtAddr(rp), To: esc(to), Date: esc(get('date')), 'Message-ID': esc(msgid),
+        'DKIM signed by': dkimSigs.map(s => `${esc(s.d)} <span class="muted">(s=${esc(s.s)})</span>`).join('<br>'), 'X-Mailer': esc(get('x-mailer') || get('user-agent')), 'X-Originating-IP': esc(get('x-originating-ip')) })}</div>
+      <div><h2>Findings</h2>${flags.length ? `<ul class="plain" style="list-style:none;padding:0">${flags.map(([l, t]) => `<li style="margin-bottom:6px"><span class="b b-${l}">${l === 'bad' ? 'risk' : l === 'warn' ? 'check' : 'note'}</span> ${esc(t)}</li>`).join('')}</ul>` : '<span class="b b-ok">No red flags</span>'}</div>
+    </div>
+  </section>
+  <section class="panel"><h2>Delivery path (${hops.length} hop${hops.length === 1 ? '' : 's'}, oldest first)</h2>
+    <div class="tablewrap"><table><thead><tr><th>#</th><th>From</th><th>By</th><th>Protocol</th><th>IPs</th><th>Time (UTC)</th><th>Delay</th></tr></thead><tbody>
+    ${hops.map((h, i) => `<tr><td>${i + 1}</td><td class="mono" style="font-size:12px">${esc(h.from || '—')}</td><td class="mono" style="font-size:12px">${esc(h.by || '—')}</td><td>${esc(h.proto || '')}${/ESMTPS|TLS/i.test(h.proto || '') ? ' <span class="b b-ok">TLS</span>' : ''}</td>
+      <td style="font-size:12px">${h.ips.map(ip => `${lnk(ip)}${isPublic(ip) ? '' : ' <span class="muted">(private/reserved)</span>'}`).join('<br>') || '—'}</td>
+      <td style="white-space:nowrap">${h.time ? esc(fmtDate(h.time)) : `<span class="muted">${esc(h.date)}</span>`}</td>
+      <td><span class="b ${h.delay > 300e3 ? 'b-warn' : h.delay < 0 ? 'b-info' : 'b-mute'}">${fmtDelay(h.delay)}</span></td></tr>`).join('') || '<tr><td colspan="7" class="muted">No Received headers.</td></tr>'}
+    </tbody></table></div></section>
+  <section class="panel"><details><summary style="cursor:pointer;font-weight:600">All headers (${H.length})</summary>
+    <div class="tablewrap" style="margin-top:8px"><table><tbody>${H.map(h => `<tr><td class="mono" style="white-space:nowrap;color:var(--muted)">${esc(h.k)}</td><td class="mono" style="font-size:12px">${esc(decodeMime(h.v))}</td></tr>`).join('')}</tbody></table></div></details></section>`;
+}
+
+const SAMPLE = `Delivered-To: victim@example.org
+Received: by 2002:a05:6a10:1234 with SMTP id abc123; Mon, 5 Oct 2026 02:14:09 -0700 (PDT)
+Authentication-Results: mx.example.org;
+       dkim=pass header.i=@mailer-cloud.example.net header.s=s1 header.b=AbCd;
+       spf=softfail (example.org: domain of transitioning bounce@mailer-cloud.example.net does not designate 203.0.113.45 as permitted sender) smtp.mailfrom=bounce@mailer-cloud.example.net;
+       dmarc=fail (p=REJECT sp=REJECT dis=QUARANTINE) header.from=paypal.com
+Received: from mail.mailer-cloud.example.net (mail.mailer-cloud.example.net [203.0.113.45])
+        by mx.example.org with ESMTPS id x12si4455ab.12.2026.10.05.02.14.08
+        for <victim@example.org>; Mon, 05 Oct 2026 02:14:08 -0700 (PDT)
+Received: from [192.168.1.20] (unknown [198.51.100.77])
+        by mail.mailer-cloud.example.net (Postfix) with ESMTPA id 4F2B1C0042
+        for <victim@example.org>; Mon,  5 Oct 2026 09:13:51 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=mailer-cloud.example.net; s=s1; h=from:subject; bh=xyz; b=AbCd
+Return-Path: <bounce@mailer-cloud.example.net>
+From: "PayPal Security <service@paypal.com>" <service@paypal.com>
+Reply-To: <support-team@paypa1-resolution.example.com>
+To: victim@example.org
+Subject: =?UTF-8?B?WW91ciBhY2NvdW50IGhhcyBiZWVuIGxpbWl0ZWQg4pqg77iP?=
+Date: Mon, 5 Oct 2026 09:13:50 +0000
+Message-ID: <20261005091350.4F2B1C0042@mail.mailer-cloud.example.net>
+X-Mailer: PHPMailer 6.8.0
+MIME-Version: 1.0
+Content-Type: text/html; charset=UTF-8`;
+
+$('#go').onclick = analyze;
+$('#sample').onclick = () => { $('#raw').value = SAMPLE; analyze(); };
+$('#clear').onclick = () => { $('#raw').value = ''; $('#out').innerHTML = ''; };
+</script>

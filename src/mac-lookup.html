@@ -1,0 +1,103 @@
+<!-- title: MAC Address Lookup | desc: Vendor (OUI) lookup, format conversion (Cisco / colon / hyphen / MikroTik), randomized-MAC detection, special-purpose addresses and IPv6 EUI-64 link-local. -->
+<section class="panel">
+  <label class="small" for="raw">MAC addresses — one per line, any format (paste from ARP tables, DHCP leases, logs…)</label>
+  <textarea id="raw" spellcheck="false" style="min-height:120px" placeholder="00:1A:2B:3C:4D:5E&#10;001a.2b3c.4d5f&#10;da-a1-19-22-33-44"></textarea>
+  <div class="row">
+    <button class="primary" id="go">Analyze</button>
+    <label class="chk"><input type="checkbox" id="optVendor" checked> Look up vendor online (api.maclookup.app)</label>
+    <select id="case"><option value="lower">lowercase</option><option value="upper">UPPERCASE</option></select>
+  </div>
+</section>
+<div id="out"></div>
+
+<script>
+const WELL_KNOWN = [
+  [/^ffffffffffff$/, 'Broadcast'],
+  [/^01005e/, 'IPv4 multicast'],
+  [/^3333/, 'IPv6 multicast'],
+  [/^0180c200000[0-9a-f]$/, 'IEEE 802.1 link-local (STP/LACP/LLDP…)'],
+  [/^01000ccccccc$/, 'Cisco CDP / VTP / DTP'],
+  [/^01000ccccccd$/, 'Cisco PVST+'],
+  [/^00000c07ac/, 'Cisco HSRPv1 virtual MAC'],
+  [/^00000c9f[0-9a-f]/, 'Cisco HSRPv2 virtual MAC'],
+  [/^00005e0001/, 'VRRP (IPv4) virtual MAC'],
+  [/^00005e0002/, 'VRRP (IPv6) virtual MAC'],
+  [/^0007b400/, 'Cisco GLBP virtual MAC'],
+  [/^000000000000$/, 'All-zero (invalid / placeholder)'],
+];
+function norm(s){
+  const h = s.toLowerCase().replace(/[^0-9a-f]/g, '');
+  return h.length === 12 || h.length === 6 ? h : null;
+}
+function formats(h, up){
+  const c = x => up ? x.toUpperCase() : x;
+  const p = h.match(/../g);
+  return { Colon: c(p.join(':')), Hyphen: c(p.join('-')), 'Cisco dotted': c(h.match(/..../g).join('.')), Bare: c(h), 'MikroTik': h.toUpperCase().match(/../g).join(':') };
+}
+function eui64(h){
+  const b = h.match(/../g).map(x => parseInt(x, 16)); b[0] ^= 0x02;
+  const e = [...b.slice(0, 3), 0xff, 0xfe, ...b.slice(3)];
+  const g = []; for (let i = 0; i < 8; i += 2) g.push(((e[i] << 8) | e[i + 1]).toString(16));
+  return fmtIPv6(parseIPv6('fe80::' + g.join(':')));
+}
+const vendorCache = new Map();
+async function vendor(h){
+  const oui = h.slice(0, 6);
+  if (vendorCache.has(oui)) return vendorCache.get(oui);
+  const r = await fetch('https://api.maclookup.app/v2/macs/' + h);
+  if (r.status === 429) throw new Error('rate limited');
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const j = await r.json();
+  const v = j.found ? { company: j.company, country: j.country, block: j.blockType, prefix: j.macPrefix } : { company: null };
+  vendorCache.set(oui, v); return v;
+}
+
+async function run(){
+  const up = $('#case').value === 'upper';
+  const lines = [...new Set($('#raw').value.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean))];
+  const items = lines.map(l => {
+    const tok = l.match(/([0-9a-f]{2}[:-]){5}[0-9a-f]{2}|([0-9a-f]{4}\.){2}[0-9a-f]{4}|\b[0-9a-f]{12}\b|([0-9a-f]{2}[:-]){2}[0-9a-f]{2}/i)?.[0] || l;
+    return { input: l, h: norm(tok) };
+  });
+  $('#out').innerHTML = `<section class="panel"><div class="tablewrap"><table><thead><tr><th>Input</th><th>Vendor</th><th>Type</th><th>Formats</th><th>IPv6 link-local (EUI-64)</th></tr></thead><tbody>
+    ${items.map((it, i) => {
+      if (!it.h) return `<tr><td class="mono">${esc(it.input)}</td><td colspan="4"><span class="b b-bad">invalid</span> <span class="muted">needs 12 hex digits (or 6 for an OUI prefix)</span></td></tr>`;
+      const full = it.h.length === 12, b0 = parseInt(it.h.slice(0, 2), 16);
+      const multicast = b0 & 1, local = b0 & 2;
+      const wk = full ? WELL_KNOWN.find(([re]) => re.test(it.h)) : null;
+      const tags = [
+        wk ? `<span class="b b-info">${esc(wk[1])}</span>` : '',
+        multicast ? '<span class="b b-info">multicast</span>' : '<span class="b b-mute">unicast</span>',
+        local ? (multicast ? '<span class="b b-mute">locally administered</span>' : '<span class="b b-warn">locally administered — likely randomized / private MAC</span>') : '<span class="b b-mute">globally unique (OUI)</span>',
+      ].join(' ');
+      const f = full ? formats(it.h, up) : { OUI: (up ? it.h.toUpperCase() : it.h).match(/../g).join(':') };
+      return `<tr><td class="mono">${esc(it.input)}</td>
+        <td id="v${i}">${local ? '<span class="muted">n/a (not vendor-assigned)</span>' : $('#optVendor').checked ? '<span class="spin"></span>' : '<span class="muted">—</span>'}</td>
+        <td style="max-width:240px">${tags}</td>
+        <td class="mono" style="font-size:12px;white-space:nowrap">${Object.entries(f).map(([k, v]) => `<div><span class="muted" style="font-family:system-ui">${k}:</span> ${esc(v)}</div>`).join('')}</td>
+        <td class="mono" style="font-size:12px">${full && !multicast ? esc(eui64(it.h)) : '—'}</td></tr>`;
+    }).join('')}
+  </tbody></table></div>
+  <div class="row"><button id="csv">Export CSV</button><span class="muted">${items.filter(i => i.h).length} valid of ${items.length}</span></div></section>`;
+
+  const rows = items.map(it => ({ ...it, vendor: '' }));
+  $('#csv').onclick = () => download('mac-addresses.csv', toCSV([['input', 'normalized', 'vendor'], ...rows.map(r => [r.input, r.h ? r.h.match(/../g).join(':') : 'invalid', r.vendor])]), 'text/csv');
+
+  if (!$('#optVendor').checked) return;
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i]; const cell = $('#v' + i);
+    if (!it.h || !cell || cell.textContent.startsWith('n/a')) continue;
+    try {
+      const cached = vendorCache.has(it.h.slice(0, 6));
+      const v = await vendor(it.h.length === 6 ? it.h + '000000' : it.h);
+      rows[i].vendor = v.company || '';
+      cell.innerHTML = v.company ? `<b>${esc(v.company)}</b>${v.country ? ` <span class="muted">${esc(v.country)}</span>` : ''}${v.block ? `<div class="muted" style="font-size:11px">${esc(v.block)} ${esc(v.prefix || '')}</div>` : ''}` : '<span class="muted">Unknown / unregistered</span>';
+      if (!cached) await sleep(550);   // stay under the free API rate limit
+    } catch (e) {
+      cell.innerHTML = `<span class="muted">Lookup failed (${esc(e.message)})</span> <a href="https://maclookup.app/search/result?mac=${it.h}" target="_blank" rel="noopener">↗</a>`;
+      if (e.message === 'rate limited') await sleep(2000);
+    }
+  }
+}
+$('#go').onclick = run;
+</script>

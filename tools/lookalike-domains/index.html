@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lookalike Domain Detector · NetOps Toolkit</title>
+<meta name="description" content="Client-side tool to detect punycode homographs, mixed-script, typosquat and brand-impersonation domains in a domain list.">
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#ffffff; --text:#1b1f24; --muted:#5d6672; --border:#dde1e6;
+  --accent:#2457d6; --accent-ink:#ffffff; --code-bg:#f0f2f5;
+  --crit:#b3261e; --crit-bg:#fdecea; --high:#c25400; --high-bg:#fff1e5;
+  --med:#8a6d00; --med-bg:#fff8db; --low:#2a6f97; --low-bg:#e8f3fa;
+  --clean:#2e7d32; --clean-bg:#e9f5ea; --mark:#ffd54f;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0f1216; --panel:#171b21; --text:#e6e9ed; --muted:#98a2ae; --border:#2a3038;
+    --accent:#6f9bff; --accent-ink:#0b0e12; --code-bg:#1f242c;
+    --crit:#ff8a80; --crit-bg:#3a1714; --high:#ffb36b; --high-bg:#3a2410;
+    --med:#ffe082; --med-bg:#332b0b; --low:#81c7f0; --low-bg:#10283a;
+    --clean:#8fd694; --clean-bg:#13291a; --mark:#8a6d00;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0f1216; --panel:#171b21; --text:#e6e9ed; --muted:#98a2ae; --border:#2a3038;
+  --accent:#6f9bff; --accent-ink:#0b0e12; --code-bg:#1f242c;
+  --crit:#ff8a80; --crit-bg:#3a1714; --high:#ffb36b; --high-bg:#3a2410;
+  --med:#ffe082; --med-bg:#332b0b; --low:#81c7f0; --low-bg:#10283a;
+  --clean:#8fd694; --clean-bg:#13291a; --mark:#8a6d00;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1180px;margin:0 auto;padding:24px 16px 64px}
+.back{display:inline-block;color:var(--muted);text-decoration:none;font-size:13px;margin-bottom:10px}
+.back:hover{color:var(--accent)}
+header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+h1{font-size:22px;margin:0 0 4px}
+.sub{color:var(--muted);margin:0}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px;margin-top:16px}
+textarea{width:100%;min-height:160px;resize:vertical;background:var(--code-bg);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}
+button,.btn{background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:7px;padding:7px 12px;font:inherit;cursor:pointer}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600}
+button:hover,.btn:hover{filter:brightness(.97)}
+input[type=file]{display:none}
+input[type=search]{flex:1;min-width:180px;background:var(--code-bg);color:var(--text);border:1px solid var(--border);border-radius:7px;padding:7px 10px;font:inherit}
+details summary{cursor:pointer;font-weight:600}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px}
+@media (max-width:720px){.grid2{grid-template-columns:1fr}}
+label.small{font-size:12px;color:var(--muted);display:block;margin-bottom:4px}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chip{border:1px solid var(--border);border-radius:999px;padding:4px 12px;cursor:pointer;user-select:none;background:var(--panel)}
+.chip.off{opacity:.45}
+.chip b{margin-left:4px}
+.lv{display:inline-block;min-width:66px;text-align:center;border-radius:5px;padding:1px 6px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.02em}
+.lv-critical{color:var(--crit);background:var(--crit-bg)} .lv-high{color:var(--high);background:var(--high-bg)}
+.lv-medium{color:var(--med);background:var(--med-bg)} .lv-low{color:var(--low);background:var(--low-bg)}
+.lv-clean{color:var(--clean);background:var(--clean-bg)}
+.tablewrap{overflow-x:auto;margin-top:12px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:8px;border-bottom:1px solid var(--border);vertical-align:top}
+th{color:var(--muted);font-weight:600;font-size:12px;white-space:nowrap}
+td.mono,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;word-break:break-all}
+tr.res{cursor:pointer}
+tr.res:hover td{background:var(--code-bg)}
+.reasons{margin:0;padding-left:16px}
+.reasons li{margin:0}
+.pts{color:var(--muted);font-size:11px}
+mark{background:var(--mark);color:inherit;border-radius:2px;padding:0 1px}
+.chars{display:flex;flex-wrap:wrap;gap:6px;padding:6px 0}
+.ch{border:1px solid var(--border);border-radius:6px;padding:4px 6px;text-align:center;min-width:54px;background:var(--panel)}
+.ch.na{border-color:var(--crit);background:var(--crit-bg)}
+.ch .g{font-size:18px;font-family:ui-monospace,Menlo,Consolas,monospace}
+.ch .c{font-size:10px;color:var(--muted)}
+.muted{color:var(--muted)}
+.note{font-size:12px;color:var(--muted);margin-top:8px}
+footer{margin-top:24px;font-size:12px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="../../">← All tools</a>
+  <header>
+    <div>
+      <h1>Lookalike Domain Detector</h1>
+      <p class="sub">Flags punycode homographs, mixed-script labels, typosquats and brand impersonation. Runs entirely in your browser — nothing is uploaded.</p>
+    </div>
+    <button id="themeBtn" title="Toggle theme"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-3px"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"/></svg> Theme</button>
+  </header>
+
+  <section class="panel">
+    <label class="small" for="input">Paste domains, URLs, hosts-file lines or DNS logs (one per line or mixed text)</label>
+    <textarea id="input" spellcheck="false" placeholder="xn--ngstr-lra8j.com&#10;paypa1.com&#10;аpple.com&#10;secure-paypal-login.xyz&#10;0.0.0.0 microsoft.com.verify-account.top"></textarea>
+    <div class="row">
+      <button class="primary" id="analyzeBtn">Analyze</button>
+      <label class="btn" for="file">Load file…</label>
+      <input type="file" id="file" accept=".txt,.csv,.log,.conf,.list,text/plain">
+      <button id="sampleBtn">Load sample</button>
+      <button id="clearBtn">Clear</button>
+      <span id="status" class="muted"></span>
+    </div>
+
+    <details style="margin-top:14px">
+      <summary>Detection settings</summary>
+      <div class="grid2">
+        <div>
+          <label class="small" for="brands">Protected brand labels (second-level name, comma or newline separated)</label>
+          <textarea id="brands" spellcheck="false" style="min-height:120px"></textarea>
+        </div>
+        <div>
+          <label class="small" for="allow">Allowlist — registrable domains never flagged (e.g. known CDNs)</label>
+          <textarea id="allow" spellcheck="false" style="min-height:120px"></textarea>
+        </div>
+      </div>
+      <p class="note">Settings stay in this page only; reload resets them to defaults.</p>
+    </details>
+  </section>
+
+  <section class="panel" id="results" hidden>
+    <div class="chips" id="chips"></div>
+    <div class="row">
+      <input type="search" id="search" placeholder="Filter results…">
+      <button id="csvBtn">Export CSV</button>
+      <button id="copyBtn">Copy flagged as blocklist</button>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Level</th><th>Score</th><th>Domain (ASCII)</th><th>Displayed as (Unicode)</th><th>Why</th></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+    <p class="note" id="tableNote"></p>
+  </section>
+
+  <footer>
+    Heuristic tool — a flag means "look closer", not proof of malice. Click a row to see each character's code point and script.
+  </footer>
+</div>
+
+<script>
+// CORE START
+const DEFAULT_BRANDS = `google, gmail, youtube, apple, icloud, microsoft, outlook, office365, onedrive, sharepoint, paypal, amazon, facebook, instagram, whatsapp, messenger, netflix, spotify, github, gitlab, linkedin, twitter, discord, telegram, tiktok, steampowered, steamcommunity, epicgames, roblox, binance, coinbase, metamask, blockchain, kraken, bybit, trustwallet, ledger, dropbox, docusign, adobe, yahoo, bankofamerica, wellsfargo, citibank, hsbc, chase, gcash, paymaya, bdo, bpi, metrobank, landbank, unionbank, securitybank, shopee, lazada, cloudflare, mikrotik, ubiquiti, godaddy, namecheap`;
+
+const DEFAULT_ALLOW = `apple-dns.net, microsoftpersonalcontent.com, sharepoint-df.com, steamstatic.com, tiktokcdn.com, tiktokcdn-eu.com, tiktokv.eu, googleapis.com, gstatic.com, googleusercontent.com, googlevideo.com, doubleclick.net, fbcdn.net, whatsapp.net, discordapp.net, discordapp.com, yahooapis.jp, amazon-adsystem.com, amazonaws.com, office.net, microsoftonline.com, windowsupdate.com`;
+
+// Multi-part public suffixes + common hosting platforms (treated as suffixes so the
+// customer subdomain becomes the "registrable" name, e.g. paypal-login.web.app).
+const MULTI_SUFFIX = new Set(`co.il org.il co.th in.th com.ua co.ve com.co com.pe com.ec com.sa com.eg co.ke com.ng com.bd com.np gob.mx gob.pe co.uk org.uk ac.uk gov.uk me.uk com.au net.au org.au edu.au co.jp ne.jp or.jp go.jp ac.jp ad.jp com.cn net.cn org.cn gov.cn com.ar gob.ar com.br gov.br com.ph net.ph org.ph gov.ph edu.ph com.sg com.my co.id co.in co.kr com.tw com.hk com.mx co.nz co.za com.tr com.vn com.pk github.io web.app firebaseapp.com pages.dev workers.dev herokuapp.com netlify.app vercel.app azurewebsites.net cloudfront.net appspot.com blogspot.com glitch.me 000webhostapp.com duckdns.org ngrok.io ngrok-free.app trycloudflare.com r2.dev repl.co onrender.com weebly.com wixsite.com`.split(/\s+/));
+
+const FREE_HOSTS = new Set(`github.io web.app firebaseapp.com pages.dev workers.dev herokuapp.com netlify.app vercel.app azurewebsites.net appspot.com blogspot.com glitch.me 000webhostapp.com duckdns.org ngrok.io ngrok-free.app trycloudflare.com r2.dev repl.co onrender.com weebly.com wixsite.com dyndns.com dynu.com cloudns.net no-ip.com`.split(/\s+/));
+
+const RISKY_TLDS = new Set(`zip mov xyz top tk ml ga cf gq click link country kim work rest icu cyou cfd sbs lol mom buzz monster quest bond beauty hair skin cam surf`.split(/\s+/));
+
+const LURE_WORDS = ['login','signin','sign-in','logon','secure','security','verify','verification','account','update','wallet','support','billing','payment','auth','recover','recovery','unlock','confirm','webscr','bonus','gift','claim','airdrop','reward','refund','suspend','validate','helpdesk'];
+
+const TEST_DOMAINS = new Set(['example','contoso','fabrikam','adventure-works','northwindtraders','wingtiptoys','tailspintoys']);
+
+// Look-alike characters → Latin (subset of Unicode confusables.txt)
+const CONF = {'а':'a','ɑ':'a','α':'a','Ь':'b','ь':'b','Ꮟ':'b','с':'c','ϲ':'c','ⅽ':'c','ԁ':'d','ⅾ':'d','е':'e','ё':'e','ҽ':'e','ɡ':'g','ց':'g','һ':'h','հ':'h','і':'i','ı':'i','ɩ':'i','ι':'i','ⅰ':'i','ӏ':'l','ј':'j','ϳ':'j','к':'k','κ':'k','ⅼ':'l','ǀ':'l','ⅿ':'m','ո':'n','о':'o','ο':'o','օ':'o','σ':'o','ჿ':'o','р':'p','ρ':'p','ԛ':'q','գ':'q','г':'r','ѕ':'s','ʂ':'s','υ':'u','ս':'u','ν':'v','ѵ':'v','ⅴ':'v','ԝ':'w','ѡ':'w','х':'x','χ':'x','ⅹ':'x','у':'y','ү':'y','γ':'y','ᴢ':'z'};
+
+const SCRIPTS = ['Latin','Cyrillic','Greek','Armenian','Georgian','Han','Hiragana','Katakana','Hangul','Arabic','Hebrew','Thai','Devanagari','Cherokee'];
+const SCRIPT_RE = Object.fromEntries(SCRIPTS.map(s => [s, new RegExp(`\\p{Script=${s}}`, 'u')]));
+const CJK = new Set(['Han','Hiragana','Katakana','Hangul']);
+
+function scriptOf(ch){
+  for (const s of SCRIPTS) if (SCRIPT_RE[s].test(ch)) return s;
+  if (/\p{M}/u.test(ch)) return 'Inherited';
+  return 'Common';
+}
+
+/* ---------- Punycode (RFC 3492) ---------- */
+function adapt(delta, numPoints, first){
+  delta = first ? Math.floor(delta / 700) : delta >> 1;
+  delta += Math.floor(delta / numPoints);
+  let k = 0;
+  while (delta > 455) { delta = Math.floor(delta / 35); k += 36; }
+  return Math.floor(k + 36 * delta / (delta + 38));
+}
+function punyDecode(input){
+  const out = []; let i = 0, n = 128, bias = 72;
+  let basic = input.lastIndexOf('-'); if (basic < 0) basic = 0;
+  for (let j = 0; j < basic; j++) {
+    const c = input.charCodeAt(j); if (c >= 0x80) throw new Error('bad input'); out.push(c);
+  }
+  for (let idx = basic > 0 ? basic + 1 : 0; idx < input.length;) {
+    const oldi = i; let w = 1;
+    for (let k = 36; ; k += 36) {
+      if (idx >= input.length) throw new Error('truncated');
+      const cp = input.charCodeAt(idx++);
+      const d = cp >= 48 && cp < 58 ? cp - 22 : cp >= 65 && cp < 91 ? cp - 65 : cp >= 97 && cp < 123 ? cp - 97 : 36;
+      if (d >= 36) throw new Error('bad digit');
+      i += d * w;
+      const t = k <= bias ? 1 : k >= bias + 26 ? 26 : k - bias;
+      if (d < t) break;
+      w *= 36 - t;
+    }
+    const len = out.length + 1;
+    bias = adapt(i - oldi, len, oldi === 0);
+    n += Math.floor(i / len); i %= len;
+    out.splice(i++, 0, n);
+  }
+  return String.fromCodePoint(...out);
+}
+function toAscii(host){
+  if (/^[\x00-\x7f]*$/.test(host)) return host.toLowerCase();
+  try { return new URL('http://' + host).hostname; } catch { return null; }
+}
+
+/* ---------- helpers ---------- */
+function skeleton(s){
+  let t = s.normalize('NFKC').toLowerCase();
+  t = [...t].map(c => CONF[c] ?? c).join('');
+  return t.normalize('NFD').replace(/\p{M}/gu, '');
+}
+function leet(s){
+  return s.replace(/rn/g,'m').replace(/vv/g,'w').replace(/cl/g,'d')
+          .replace(/0/g,'o').replace(/1/g,'l').replace(/3/g,'e').replace(/4/g,'a')
+          .replace(/5/g,'s').replace(/7/g,'t').replace(/8/g,'b').replace(/\$/g,'s');
+}
+function osa(a, b){ // optimal string alignment distance (Damerau-Levenshtein w/o repeats)
+  const m = a.length, n = b.length;
+  if (Math.abs(m - n) > 2) return 3;
+  const d = Array.from({length: m + 1}, (_, i) => { const r = new Array(n + 1).fill(0); r[0] = i; return r; });
+  for (let j = 0; j <= n; j++) d[0][j] = j;
+  for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++) {
+    const cost = a[i-1] === b[j-1] ? 0 : 1;
+    d[i][j] = Math.min(d[i-1][j] + 1, d[i][j-1] + 1, d[i-1][j-1] + cost);
+    if (i > 1 && j > 1 && a[i-1] === b[j-2] && a[i-2] === b[j-1]) d[i][j] = Math.min(d[i][j], d[i-2][j-2] + 1);
+  }
+  return d[m][n];
+}
+function entropy(s){
+  const f = {}; for (const c of s) f[c] = (f[c] || 0) + 1;
+  return Object.values(f).reduce((h, v) => { const p = v / s.length; return h - p * Math.log2(p); }, 0);
+}
+function splitRegistrable(labels){
+  const last2 = labels.slice(-2).join('.');
+  const take = labels.length >= 3 && MULTI_SUFFIX.has(last2) ? 3 : 2;
+  const reg = labels.slice(-take);
+  return { registrable: reg.join('.'), sld: reg[0], suffix: reg.slice(1).join('.'), sub: labels.slice(0, -take) };
+}
+function parseList(str){
+  return [...new Set(str.split(/[\s,;]+/).map(s => s.trim().toLowerCase()).filter(Boolean))];
+}
+
+/* ---------- extraction ---------- */
+function extractDomains(text){
+  const out = new Set();
+  for (let tok of text.split(/[\s,;"'<>()\[\]{}|]+/)) {
+    if (!tok) continue;
+    tok = tok.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');   // scheme
+    tok = tok.replace(/^[^@\/]*@/, '');                    // userinfo
+    tok = tok.split(/[\/?#]/)[0];                          // path
+    tok = tok.replace(/:\d+$/, '').replace(/^\*\./, '').replace(/^\.+|\.+$/g, '');
+    if (!tok.includes('.')) continue;
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(tok)) continue;    // IPv4
+    const labels = tok.split('.');
+    if (labels.some(l => !l || l.length > 63 || !/^[\p{L}\p{N}\p{M}_-]+$/u.test(l))) continue;
+    if (/^\d+$/.test(labels[labels.length - 1])) continue;
+    const ascii = toAscii(tok);
+    if (ascii) out.add(ascii);
+  }
+  return [...out];
+}
+
+/* ---------- analysis ---------- */
+function analyze(ascii, cfg){
+  const reasons = []; const add = (pts, text) => reasons.push({pts, text});
+  const labels = ascii.split('.');
+  let uniLabels;
+  try {
+    uniLabels = labels.map(l => l.startsWith('xn--') ? punyDecode(l.slice(4)) : l);
+  } catch {
+    uniLabels = labels; add(40, 'Malformed punycode label');
+  }
+  const unicode = uniLabels.join('.');
+  const { registrable, sld, suffix, sub } = splitRegistrable(labels);
+  const regUni = splitRegistrable(uniLabels);
+  const tld = labels[labels.length - 1];
+
+  if (cfg.allow.has(registrable)) {
+    return { ascii, unicode, registrable, score: 0, level: 'clean', reasons: [{pts: 0, text: 'Allowlisted'}] };
+  }
+
+  // 1. IDN / script analysis
+  if (labels.some(l => l.startsWith('xn--'))) add(30, 'Punycode (IDN) label — displays as non-ASCII text');
+  uniLabels.forEach(l => {
+    if (/^[\x00-\x7f]*$/.test(l)) return;
+    const scripts = new Set([...l].map(scriptOf).filter(s => s !== 'Common' && s !== 'Inherited'));
+    const sk = skeleton(l);
+    const looksAscii = /^[a-z0-9-]+$/.test(sk);
+    if (scripts.size > 1 && ![...scripts].every(s => CJK.has(s))) {
+      add(60, `Mixed scripts in “${l}”: ${[...scripts].join(' + ')}`);
+    } else if (scripts.size === 1 && !scripts.has('Latin') && looksAscii) {
+      add(50, `All-${[...scripts][0]} label that reads as Latin “${sk}”`);
+    } else if (scripts.size === 1 && scripts.has('Latin') && looksAscii) {
+      add(25, `Accented/look-alike Latin characters — reads as “${sk}”`);
+    }
+  });
+
+  // 2. Brand impersonation (keep strongest brand hit)
+  const sldUni = regUni.sld;
+  const skel = skeleton(sldUni);
+  const lk = leet(skel);
+  const fullLower = ascii;
+  const hasLure = LURE_WORDS.some(w => fullLower.includes(w));
+  let best = null; const hit = (pts, text) => { if (!best || pts > best.pts) best = {pts, text}; };
+
+  for (const brand of cfg.brands) {
+    if (brand.length < 3) continue;
+    if (sld === brand) {
+      if (RISKY_TLDS.has(tld)) hit(30, `Brand “${brand}” on high-risk TLD .${tld}`);
+      continue;
+    }
+    if (sldUni !== sld && skel === brand) { hit(100, `Homograph of “${brand}” — visually identical`); continue; }
+    if (lk === brand) { hit(70, `Character substitution of “${brand}” (e.g. 0→o, 1→l, rn→m)`); continue; }
+    if (sld.replace(/-/g, '') === brand) { hit(60, `Hyphenated “${brand}”`); continue; }
+    if (brand.length >= 6) {
+      const d = osa(lk, brand);
+      if (d === 1) { hit(60, `Typosquat of “${brand}” (1 edit away)`); continue; }
+      if (d === 2 && brand.length >= 8) { hit(45, `Typosquat of “${brand}” (2 edits away)`); continue; }
+    }
+    if (brand.length >= 4 && lk.includes(brand)) {
+      hit(hasLure ? 45 : 10, hasLure ? `Brand “${brand}” combined with lure word` : `Contains brand “${brand}”`);
+      continue;
+    }
+    if (brand.length >= 4 && sub.some(l => l === brand || l.startsWith(brand + '-') || l.endsWith('-' + brand))) {
+      hit(hasLure ? 60 : 40, `“${brand}” used as subdomain of unrelated ${registrable}`);
+    }
+  }
+  if (best) add(best.pts, best.text);
+
+  // 3. Other signals
+  if (RISKY_TLDS.has(tld) && !(best && best.text.includes('high-risk TLD'))) add(15, `High-risk TLD .${tld}`);
+  if (FREE_HOSTS.has(suffix) || FREE_HOSTS.has(registrable)) { if (reasons.length || best) add(10, `Free/dynamic hosting (${FREE_HOSTS.has(suffix) ? suffix : registrable})`); }
+  if (TEST_DOMAINS.has(sld)) add(20, 'Reserved/fictional example domain — should not appear in real traffic');
+  if (sld === 'www') add(20, `Unusual: “www” as registrable name (${registrable})`);
+  const core = sldUni;
+  const vow = (core.match(/[aeiouy]/g) || []).length / core.length;
+  const dig = (core.match(/\d/g) || []).length / core.length;
+  if (!core.includes('-') && core.length >= 12 && entropy(core) >= 3.4 && (dig >= 0.15 || vow < 0.2))
+    add(15, 'Random-looking name (possible DGA)');
+  if ((sldUni.match(/-/g) || []).length >= 3) add(10, 'Many hyphens in name');
+  if (labels.length >= 6) add(5, `Deep subdomain chain (${labels.length} labels)`);
+
+  const score = Math.min(100, reasons.reduce((s, r) => s + r.pts, 0));
+  const level = score >= 80 ? 'critical' : score >= 50 ? 'high' : score >= 25 ? 'medium' : score >= 10 ? 'low' : 'clean';
+  return { ascii, unicode, registrable, score, level, reasons };
+}
+// CORE END
+
+/* ---------- UI ---------- */
+const $ = id => document.getElementById(id);
+const LEVELS = ['critical','high','medium','low','clean'];
+const shown = new Set(['critical','high','medium']);
+let results = [];
+const RENDER_LIMIT = 3000;
+
+$('brands').value = DEFAULT_BRANDS.split(/,\s*/).join('\n');
+$('allow').value = DEFAULT_ALLOW.split(/,\s*/).join('\n');
+
+const SAMPLE = `xn--ngstr-lra8j.com
+xn--pple-43d.com
+xn--80ak6aa92e.com
+paypa1.com
+rnicrosoft.com
+gooogle.com
+g00gle-login.com
+pay-pal.com
+secure-paypal-login.xyz
+microsoft.com.verify-account.top
+https://gcash-rewards.web.app/claim?id=1
+0.0.0.0 metamask-wallet-support.net
+binance.com
+github.com
+www.contoso.com
+www.io
+apple-dns.net
+x7kq9zt2vbnmw4pl.com
+bankofamerica.com
+facebook-security-check.com`;
+
+function esc(s){ return s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function hlNonAscii(s){ return [...s].map(c => c.charCodeAt(0) > 127 ? `<mark>${esc(c)}</mark>` : esc(c)).join(''); }
+
+function run(){
+  const text = $('input').value;
+  const cfg = { brands: parseList($('brands').value), allow: new Set(parseList($('allow').value)) };
+  const t0 = performance.now();
+  const domains = extractDomains(text);
+  results = domains.map(d => analyze(d, cfg)).sort((a, b) => b.score - a.score || a.ascii.localeCompare(b.ascii));
+  $('status').textContent = `${domains.length.toLocaleString()} unique domains analyzed in ${Math.round(performance.now() - t0)} ms`;
+  $('results').hidden = false;
+  render();
+}
+
+function render(){
+  const counts = Object.fromEntries(LEVELS.map(l => [l, 0]));
+  results.forEach(r => counts[r.level]++);
+  $('chips').innerHTML = LEVELS.map(l =>
+    `<span class="chip ${shown.has(l) ? '' : 'off'}" data-l="${l}"><span class="lv lv-${l}">${l}</span><b>${counts[l]}</b></span>`).join('');
+  const q = $('search').value.trim().toLowerCase();
+  const rows = results.filter(r => shown.has(r.level) &&
+    (!q || r.ascii.includes(q) || r.unicode.toLowerCase().includes(q) || r.reasons.some(x => x.text.toLowerCase().includes(q))));
+  $('tbody').innerHTML = rows.slice(0, RENDER_LIMIT).map((r, i) => `
+    <tr class="res" data-i="${results.indexOf(r)}">
+      <td><span class="lv lv-${r.level}">${r.level}</span></td>
+      <td>${r.score}</td>
+      <td class="mono">${esc(r.ascii)}</td>
+      <td class="mono">${r.unicode !== r.ascii ? hlNonAscii(r.unicode) : '<span class="muted">—</span>'}</td>
+      <td><ul class="reasons">${r.reasons.map(x => `<li>${esc(x.text)} ${x.pts ? `<span class="pts">+${x.pts}</span>` : ''}</li>`).join('') || '<li class="muted">No signals</li>'}</ul></td>
+    </tr>`).join('') || `<tr><td colspan="5" class="muted">No results for the current filter.</td></tr>`;
+  $('tableNote').textContent = rows.length > RENDER_LIMIT ? `Showing first ${RENDER_LIMIT} of ${rows.length} rows — narrow the filter or export CSV for all.` : `${rows.length} rows shown.`;
+}
+
+function charBreakdown(r){
+  return `<div class="chars">${[...r.unicode].map(c => {
+    const cp = c.codePointAt(0);
+    return `<div class="ch ${cp > 127 ? 'na' : ''}"><div class="g">${esc(c)}</div><div class="c">U+${cp.toString(16).toUpperCase().padStart(4,'0')}</div><div class="c">${scriptOf(c)}</div></div>`;
+  }).join('')}</div>`;
+}
+
+$('tbody').addEventListener('click', e => {
+  const tr = e.target.closest('tr.res'); if (!tr) return;
+  const next = tr.nextElementSibling;
+  if (next && next.classList.contains('detail')) { next.remove(); return; }
+  const r = results[+tr.dataset.i];
+  tr.insertAdjacentHTML('afterend', `<tr class="detail"><td colspan="5">
+    <div class="muted" style="font-size:12px">Registrable domain: <span class="mono">${esc(r.registrable)}</span></div>${charBreakdown(r)}</td></tr>`);
+});
+$('chips').addEventListener('click', e => {
+  const c = e.target.closest('.chip'); if (!c) return;
+  const l = c.dataset.l; shown.has(l) ? shown.delete(l) : shown.add(l); render();
+});
+$('search').addEventListener('input', render);
+$('analyzeBtn').onclick = run;
+$('sampleBtn').onclick = () => { $('input').value = SAMPLE; run(); };
+$('clearBtn').onclick = () => { $('input').value = ''; results = []; $('results').hidden = true; $('status').textContent = ''; };
+$('file').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  $('input').value = await f.text(); e.target.value = ''; run();
+};
+$('input').addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') run(); });
+
+function download(name, text, type){
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], {type}));
+  a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+$('csvBtn').onclick = () => {
+  const q = v => `"${String(v).replace(/"/g, '""')}"`;
+  const lines = [['level','score','domain_ascii','domain_unicode','registrable','reasons'].join(',')]
+    .concat(results.map(r => [r.level, r.score, r.ascii, r.unicode, r.registrable, r.reasons.map(x => x.text).join(' | ')].map(q).join(',')));
+  download('lookalike-domains.csv', '﻿' + lines.join('\n'), 'text/csv');
+};
+$('copyBtn').onclick = async () => {
+  const list = results.filter(r => ['critical','high','medium'].includes(r.level)).map(r => r.ascii).join('\n');
+  try { await navigator.clipboard.writeText(list); $('copyBtn').textContent = 'Copied ✓'; }
+  catch { download('blocklist.txt', list, 'text/plain'); }
+  setTimeout(() => $('copyBtn').textContent = 'Copy flagged as blocklist', 1500);
+};
+$('themeBtn').onclick = () => {
+  const root = document.documentElement;
+  const dark = root.dataset.theme ? root.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+  root.dataset.theme = dark ? 'light' : 'dark';
+};
+</script>
+</body>
+</html>

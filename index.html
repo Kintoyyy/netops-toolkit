@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NetOps Toolkit</title>
+<meta name="description" content="Browser-based tools for network and NOC engineers. Everything runs locally — no uploads, no tracking.">
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#ffffff; --text:#1b1f24; --muted:#5d6672; --border:#dde1e6;
+  --accent:#2457d6; --accent-soft:#e8eefc; --code-bg:#f0f2f5;
+  --live:#2e7d32; --live-bg:#e9f5ea; --beta:#8a6d00; --beta-bg:#fff8db;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0f1216; --panel:#171b21; --text:#e6e9ed; --muted:#98a2ae; --border:#2a3038;
+    --accent:#6f9bff; --accent-soft:#18233b; --code-bg:#1f242c;
+    --live:#8fd694; --live-bg:#13291a; --beta:#ffe082; --beta-bg:#332b0b;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0f1216; --panel:#171b21; --text:#e6e9ed; --muted:#98a2ae; --border:#2a3038;
+  --accent:#6f9bff; --accent-soft:#18233b; --code-bg:#1f242c;
+  --live:#8fd694; --live-bg:#13291a; --beta:#ffe082; --beta-bg:#332b0b;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:inherit}
+.wrap{max-width:1080px;margin:0 auto;padding:0 16px}
+nav{display:flex;align-items:center;justify-content:space-between;padding:18px 0}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;text-decoration:none;font-size:16px}
+.logo{width:30px;height:30px;border-radius:8px;background:var(--accent);display:grid;place-items:center;color:#fff}
+.navlinks{display:flex;gap:8px;align-items:center}
+.navlinks a,.navlinks button{color:var(--muted);text-decoration:none;font:inherit;font-size:14px;background:none;border:1px solid transparent;border-radius:7px;padding:6px 10px;cursor:pointer}
+.navlinks a:hover,.navlinks button:hover{color:var(--text);border-color:var(--border)}
+
+.hero{padding:48px 0 28px}
+.hero h1{font-size:clamp(28px,5vw,42px);line-height:1.15;margin:0 0 12px;letter-spacing:-.02em}
+.hero h1 span{color:var(--accent)}
+.hero p{color:var(--muted);max-width:620px;margin:0;font-size:17px}
+.points{display:flex;gap:18px;flex-wrap:wrap;margin-top:18px;color:var(--muted);font-size:13px}
+.points span::before{content:"✓ ";color:var(--live);font-weight:700}
+
+.toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:24px 0 16px}
+.toolbar input{flex:1;min-width:200px;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:9px;padding:10px 12px;font:inherit}
+.tags{display:flex;gap:6px;flex-wrap:wrap}
+.tag{border:1px solid var(--border);background:var(--panel);color:var(--muted);border-radius:999px;padding:5px 12px;font-size:13px;cursor:pointer}
+.tag.on{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
+
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;padding-bottom:16px}
+.card{display:flex;flex-direction:column;gap:10px;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px;text-decoration:none;transition:border-color .15s,transform .15s}
+a.card:hover{border-color:var(--accent);transform:translateY(-2px)}
+.card-top{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.icon{width:40px;height:40px;border-radius:10px;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center}
+.status{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;border-radius:5px;padding:2px 7px}
+.status.live{color:var(--live);background:var(--live-bg)}
+.status.beta{color:var(--beta);background:var(--beta-bg)}
+.card h3{margin:0;font-size:17px}
+.card p{margin:0;color:var(--muted);font-size:14px;flex:1}
+.ctags{display:flex;gap:6px;flex-wrap:wrap}
+.ctags span{font-size:11px;color:var(--muted);background:var(--code-bg);border-radius:4px;padding:2px 6px}
+.open{font-size:13px;font-weight:600;color:var(--accent)}
+.card.soon{border-style:dashed;background:transparent;align-items:flex-start;justify-content:center;min-height:180px}
+.card.soon p{flex:0}
+.empty{color:var(--muted);padding:24px 0}
+
+footer{border-top:1px solid var(--border);margin-top:40px;padding:22px 0 40px;color:var(--muted);font-size:13px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+footer a{color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav>
+    <a class="brand" href="./">
+      <span class="logo" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z"/></svg>
+      </span>
+      <span id="siteName">NetOps Toolkit</span>
+    </a>
+    <div class="navlinks">
+      <a href="#tools">Tools</a>
+      <a href="https://github.com/Kintoyyy" target="_blank" rel="noopener">GitHub</a>
+      <button id="themeBtn" title="Toggle theme" aria-label="Toggle theme"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-3px"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"/></svg></button>
+    </div>
+  </nav>
+
+  <section class="hero">
+    <h1>Small tools for <span>network, OSINT &amp; NOC</span> work.</h1>
+    <p>Browser-based OSINT and IT utilities for ISP operators, DNS admins and security folks. <b>Offline</b> tools never send your data anywhere; <b>online</b> tools query public APIs (DoH, RDAP, CT logs) straight from your browser.</p>
+    <div class="points"><span>No backend</span><span>No sign-up</span><span>No tracking</span><span>Open source</span></div>
+  </section>
+
+  <section id="tools">
+    <div class="toolbar">
+      <input type="search" id="q" placeholder="Search tools…" aria-label="Search tools">
+      <div class="tags" id="tags"></div>
+    </div>
+    <div class="grid" id="grid"></div>
+  </section>
+
+  <footer>
+    <span>© <span id="yr"></span> Kent Rato · Built for the NOC.</span>
+    <span><a href="https://github.com/Kintoyyy" target="_blank" rel="noopener">github.com/Kintoyyy</a></span>
+  </footer>
+</div>
+
+<script>
+/*  ── Tool registry ──────────────────────────────────────────────
+    To add a tool: create tools/<slug>/index.html (or src/<slug>.html + run build.py)
+    and add an entry here.
+    mode: "offline" = 100% in-browser · "online" = calls a public API from your browser
+    icon: key from ICONS below                                                 */
+const TOOLS = [
+  { name: 'Lookalike Domain Detector', href: 'tools/lookalike-domains/', tags: ['DNS', 'Security'], icon: 'shield', mode: 'offline',
+    desc: 'Scan domain lists, DNS logs or hosts files for punycode homographs, mixed-script labels, typosquats and brand impersonation.' },
+  { name: 'Domain & IP Intel', href: 'tools/domain-intel/', tags: ['OSINT'], icon: 'search', mode: 'online',
+    desc: 'RDAP (modern WHOIS) for domains, IPs and ASNs — registrar, age, expiry, abuse contacts, network owner, geolocation and PTR.' },
+  { name: 'DNS Lookup', href: 'tools/dns-lookup/', tags: ['DNS'], icon: 'globe', mode: 'online',
+    desc: 'Query any record type over DNS-over-HTTPS, compare Cloudflare vs Google answers, check DNSSEC and reverse DNS.' },
+  { name: 'Subdomain Finder', href: 'tools/subdomains/', tags: ['OSINT', 'DNS'], icon: 'tree', mode: 'online',
+    desc: 'Passive subdomain discovery from Certificate Transparency logs, with optional live DNS resolution and CSV export.' },
+  { name: 'Email Security Check', href: 'tools/email-security/', tags: ['Email', 'DNS'], icon: 'mail', mode: 'online',
+    desc: 'Audit MX, SPF (recursive lookup count), DMARC, DKIM selectors, MTA-STS, TLS-RPT and BIMI. Is the domain spoofable?' },
+  { name: 'Email Header Analyzer', href: 'tools/email-headers/', tags: ['Email', 'OSINT', 'Security'], icon: 'inbox', mode: 'offline',
+    desc: 'Trace the delivery path, hop delays and origin IP, read SPF/DKIM/DMARC verdicts and spot phishing red flags.' },
+  { name: 'IOC Extractor & Defanger', href: 'tools/ioc-extractor/', tags: ['Security', 'OSINT'], icon: 'target', mode: 'offline',
+    desc: 'Pull IPs, domains, URLs, emails, hashes, CVEs and ATT&CK IDs out of reports or logs. Refang input, defang output.' },
+  { name: 'Subnet Calculator', href: 'tools/subnet-calc/', tags: ['Network'], icon: 'calc', mode: 'offline',
+    desc: 'IPv4 & IPv6 subnet math, VLSM split, CIDR aggregation, IP-in-range checks and MikroTik address-list export.' },
+  { name: 'Blocklist Converter', href: 'tools/blocklist-converter/', tags: ['DNS', 'Network', 'Security'], icon: 'filter', mode: 'offline',
+    desc: 'Convert hosts / Adblock / plain lists into BIND RPZ, Unbound, dnsmasq, MikroTik, AdGuard/Pi-hole, Squid or ipset.' },
+  { name: 'MAC Address Lookup', href: 'tools/mac-lookup/', tags: ['Network'], icon: 'chip', mode: 'online',
+    desc: 'Vendor (OUI) lookup, Cisco/colon/hyphen formats, randomized-MAC detection, HSRP/VRRP addresses and EUI-64.' },
+  { name: 'Encode / Decode Toolbox', href: 'tools/encode-decode/', tags: ['Utilities'], icon: 'term', mode: 'offline',
+    desc: 'Base64, URL, hex, HTML, JWT, punycode, MD5/SHA hashes for text or files, Unix timestamps, JSON, UUIDs and passwords.' },
+];
+
+const ICONS = {
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>',
+  globe:  '<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
+  tree:   '<rect x="9" y="2" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="16" y="16" width="6" height="6" rx="1"/><path d="M12 8v4M5 16v-2h14v2"/>',
+  mail:   '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 6-10 7L2 6"/>',
+  inbox:  '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+  calc:   '<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M8 6h8M8 11h.01M12 11h.01M16 11h.01M8 15h.01M12 15h.01M16 15h.01M8 19h8"/>',
+  filter: '<path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/>',
+  chip:   '<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/>',
+  chart:  '<path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 5-6"/>',
+  term:   '<path d="m4 17 6-6-6-6M12 19h8"/>',
+};
+const svg = k => `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONS[k] || ICONS.term}</svg>`;
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+const allTags = [...new Set(TOOLS.flatMap(t => t.tags))].sort();
+let activeTag = null;
+
+function renderTags(){
+  document.getElementById('tags').innerHTML =
+    ['All', ...allTags].map(t => `<button class="tag ${(t === 'All' && !activeTag) || t === activeTag ? 'on' : ''}" data-t="${esc(t)}">${esc(t)}</button>`).join('');
+}
+function render(){
+  const q = document.getElementById('q').value.trim().toLowerCase();
+  const list = TOOLS.filter(t =>
+    (!activeTag || t.tags.includes(activeTag)) &&
+    (!q || (t.name + ' ' + t.desc + ' ' + t.tags.join(' ')).toLowerCase().includes(q)));
+  const cards = list.map(t => `
+    <a class="card" href="${esc(t.href)}">
+      <div class="card-top"><span class="icon">${svg(t.icon)}</span><span class="status ${t.mode === 'offline' ? 'live' : 'beta'}" title="${t.mode === 'offline' ? 'Runs 100% in your browser' : 'Calls a public API directly from your browser'}">${t.mode}</span></div>
+      <h3>${esc(t.name)}</h3>
+      <p>${esc(t.desc)}</p>
+      <div class="card-top"><div class="ctags">${t.tags.map(g => `<span>${esc(g)}</span>`).join('')}</div><span class="open">Open →</span></div>
+    </a>`).join('');
+  const soon = !q && !activeTag ? `
+    <div class="card soon">
+      <span class="icon">${svg('term')}</span>
+      <h3>More tools on the way</h3>
+      <p>Have an idea for a NOC utility? Open an issue on GitHub.</p>
+    </div>` : '';
+  document.getElementById('grid').innerHTML = cards + soon || '<p class="empty">No tools match your search.</p>';
+}
+
+document.getElementById('tags').addEventListener('click', e => {
+  const b = e.target.closest('.tag'); if (!b) return;
+  activeTag = b.dataset.t === 'All' ? null : b.dataset.t; renderTags(); render();
+});
+document.getElementById('q').addEventListener('input', render);
+document.getElementById('yr').textContent = new Date().getFullYear();
+document.getElementById('themeBtn').onclick = () => {
+  const r = document.documentElement;
+  const dark = r.dataset.theme ? r.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+  r.dataset.theme = dark ? 'light' : 'dark';
+};
+renderTags(); render();
+</script>
+</body>
+</html>

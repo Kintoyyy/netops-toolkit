@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Encode / Decode Toolbox · NetOps Toolkit</title>
+<meta name="description" content="Base64, URL, hex, HTML entities, JWT, punycode, hashes (MD5/SHA) for text or files, Unix timestamps, JSON formatting, plus UUID and password generators. Fully offline.">
+<link rel="stylesheet" href="../../assets/style.css">
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="../../">← All tools</a>
+  <header class="top">
+    <div><h1>Encode / Decode Toolbox</h1><p class="sub">Base64, URL, hex, HTML entities, JWT, punycode, hashes (MD5/SHA) for text or files, Unix timestamps, JSON formatting, plus UUID and password generators. Fully offline.</p></div>
+    <button id="themeBtn" title="Toggle theme"></button>
+  </header>
+<script src="../../assets/common.js"></script>
+<section class="panel">
+  <div class="chips" id="ops"></div>
+  <div class="grid2" style="margin-top:12px">
+    <div>
+      <label class="small" for="in">Input</label>
+      <textarea id="in" spellcheck="false" style="min-height:240px"></textarea>
+      <div class="row"><label class="btn" for="file" id="fileLbl" hidden>Hash a file…</label><input type="file" id="file"><button id="clr">Clear</button><span class="muted" id="inInfo"></span></div>
+    </div>
+    <div>
+      <label class="small">Output</label>
+      <div id="outWrap"><pre id="out" style="min-height:240px"></pre></div>
+      <div class="row"><button id="cp">Copy</button><button id="swap">↺ Use as input</button><span class="muted" id="outInfo"></span></div>
+    </div>
+  </div>
+</section>
+
+<script>
+/* ---------- primitives ---------- */
+const te = new TextEncoder(), td = new TextDecoder('utf-8', { fatal: false });
+const bytesToB64 = b => { let s = ''; for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); return btoa(s); };
+const b64ToBytes = s => { s = s.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '='; return Uint8Array.from(atob(s), c => c.charCodeAt(0)); };
+const hex = b => [...b].map(x => x.toString(16).padStart(2, '0')).join('');
+
+function md5(bytes){
+  const K = new Uint32Array(64), S = [7,12,17,22,5,9,14,20,4,11,16,23,6,10,15,21];
+  for (let i = 0; i < 64; i++) K[i] = Math.floor(Math.abs(Math.sin(i + 1)) * 2 ** 32);
+  const len = bytes.length, nb = ((len + 8) >> 6) + 1, w = new Uint32Array(nb * 16);
+  for (let i = 0; i < len; i++) w[i >> 2] |= bytes[i] << ((i % 4) * 8);
+  w[len >> 2] |= 0x80 << ((len % 4) * 8);
+  w[nb * 16 - 2] = (len * 8) >>> 0; w[nb * 16 - 1] = Math.floor(len / 0x20000000);
+  let a0 = 0x67452301, b0 = 0xefcdab89, c0 = 0x98badcfe, d0 = 0x10325476;
+  for (let k = 0; k < nb; k++) {
+    let A = a0, B = b0, C = c0, D = d0;
+    for (let i = 0; i < 64; i++) {
+      let F, g; const r = i >> 4;
+      if (r === 0) { F = (B & C) | (~B & D); g = i; } else if (r === 1) { F = (D & B) | (~D & C); g = (5 * i + 1) % 16; }
+      else if (r === 2) { F = B ^ C ^ D; g = (3 * i + 5) % 16; } else { F = C ^ (B | ~D); g = (7 * i) % 16; }
+      const s = S[r * 4 + (i % 4)];
+      F = (F + A + K[i] + w[k * 16 + g]) >>> 0; A = D; D = C; C = B; B = (B + ((F << s) | (F >>> (32 - s)))) >>> 0;
+    }
+    a0 = (a0 + A) >>> 0; b0 = (b0 + B) >>> 0; c0 = (c0 + C) >>> 0; d0 = (d0 + D) >>> 0;
+  }
+  return [a0, b0, c0, d0].map(x => [0, 8, 16, 24].map(s => ((x >>> s) & 255).toString(16).padStart(2, '0')).join('')).join('');
+}
+async function hashes(bytes){
+  const out = { MD5: md5(bytes) };
+  if (crypto.subtle) for (const a of ['SHA-1', 'SHA-256', 'SHA-384', 'SHA-512']) out[a] = hex(new Uint8Array(await crypto.subtle.digest(a, bytes)));
+  return out;
+}
+
+/* punycode (RFC 3492) */
+function adapt(d, n, f){ d = f ? Math.floor(d / 700) : d >> 1; d += Math.floor(d / n); let k = 0; while (d > 455) { d = Math.floor(d / 35); k += 36; } return Math.floor(k + 36 * d / (d + 38)); }
+function punyDecode(input){
+  const out = []; let i = 0, n = 128, bias = 72, basic = input.lastIndexOf('-'); if (basic < 0) basic = 0;
+  for (let j = 0; j < basic; j++) out.push(input.charCodeAt(j));
+  for (let idx = basic > 0 ? basic + 1 : 0; idx < input.length;) {
+    const oldi = i; let w = 1;
+    for (let k = 36; ; k += 36) {
+      if (idx >= input.length) throw new Error('Invalid punycode');
+      const cp = input.charCodeAt(idx++);
+      const d = cp >= 48 && cp < 58 ? cp - 22 : cp >= 65 && cp < 91 ? cp - 65 : cp >= 97 && cp < 123 ? cp - 97 : 36;
+      if (d >= 36) throw new Error('Invalid punycode');
+      i += d * w; const t = k <= bias ? 1 : k >= bias + 26 ? 26 : k - bias; if (d < t) break; w *= 36 - t;
+    }
+    const len = out.length + 1; bias = adapt(i - oldi, len, oldi === 0); n += Math.floor(i / len); i %= len; out.splice(i++, 0, n);
+  }
+  return String.fromCodePoint(...out);
+}
+
+function relTime(ms){
+  const d = (ms - Date.now()) / 1000, a = Math.abs(d);
+  const u = a < 60 ? [a, 'second'] : a < 3600 ? [a / 60, 'minute'] : a < 86400 ? [a / 3600, 'hour'] : a < 2592000 ? [a / 86400, 'day'] : a < 31536000 ? [a / 2592000, 'month'] : [a / 31536000, 'year'];
+  const v = Math.round(u[0]); return d < 0 ? `${v} ${u[1]}${v === 1 ? '' : 's'} ago` : `in ${v} ${u[1]}${v === 1 ? '' : 's'}`;
+}
+function tsTable(ms){
+  const d = new Date(ms);
+  return [['UTC', d.toUTCString()], ['ISO 8601', d.toISOString()], ['Local', d.toLocaleString() + ` (${Intl.DateTimeFormat().resolvedOptions().timeZone})`],
+    ['Unix seconds', Math.floor(ms / 1000)], ['Unix ms', ms], ['Relative', relTime(ms)]];
+}
+
+/* ---------- operations ---------- */
+const kvBlock = rows => `<div class="kv" style="padding:4px 0">${rows.map(([k, v]) => `<div>${esc(k)}</div><div>${esc(v)}</div>`).join('')}</div>`;
+const OPS = {
+  'Base64 ↑': s => bytesToB64(te.encode(s)),
+  'Base64 ↓': s => td.decode(b64ToBytes(s)),
+  'Base64URL ↑': s => bytesToB64(te.encode(s)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
+  'URL ↑': s => encodeURIComponent(s),
+  'URL ↓': s => decodeURIComponent(s.replace(/\+/g, ' ')),
+  'Hex ↑': s => hex(te.encode(s)),
+  'Hex ↓': s => { const h = s.replace(/0x|\\x|[\s:,-]/gi, ''); if (!/^([0-9a-f]{2})*$/i.test(h)) throw new Error('Not valid hex'); return td.decode(new Uint8Array(h.match(/../g)?.map(x => parseInt(x, 16)) || [])); },
+  'HTML ↑': s => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])),
+  'HTML ↓': s => { const t = document.createElement('textarea'); t.innerHTML = s; return t.value; },
+  'ROT13': s => s.replace(/[a-z]/gi, c => String.fromCharCode((c <= 'Z' ? 90 : 122) >= (c = c.charCodeAt(0) + 13) ? c : c - 26)),
+  'Punycode ↓': s => s.split(/\s+/).filter(Boolean).map(d => d.split('.').map(l => /^xn--/i.test(l) ? punyDecode(l.slice(4).toLowerCase()) : l).join('.')).join('\n'),
+  'Punycode ↑': s => s.split(/\s+/).filter(Boolean).map(d => { try { return new URL('http://' + d).hostname; } catch { return '(invalid) ' + d; } }).join('\n'),
+  'JWT': s => {
+    const p = s.trim().split('.'); if (p.length < 2) throw new Error('A JWT has 3 dot-separated parts');
+    const h = JSON.parse(td.decode(b64ToBytes(p[0]))), b = JSON.parse(td.decode(b64ToBytes(p[1])));
+    const times = ['exp', 'iat', 'nbf', 'auth_time'].filter(k => typeof b[k] === 'number').map(k => [k, `${new Date(b[k] * 1000).toISOString()} (${relTime(b[k] * 1000)})`]);
+    const status = typeof b.exp === 'number' ? (b.exp * 1000 < Date.now() ? '<span class="b b-bad">expired</span>' : '<span class="b b-ok">not expired</span>') : '<span class="b b-mute">no exp</span>';
+    return { html: `<div class="row" style="margin-top:0">${status} <span class="b b-info">alg ${esc(h.alg)}</span>${h.alg === 'none' ? ' <span class="b b-bad">unsigned!</span>' : ''} <span class="muted">Signature not verified.</span></div>
+      <h3>Header</h3><pre>${esc(JSON.stringify(h, null, 2))}</pre><h3>Payload</h3><pre>${esc(JSON.stringify(b, null, 2))}</pre>${times.length ? '<h3>Timestamps</h3>' + kvBlock(times) : ''}`,
+      text: JSON.stringify({ header: h, payload: b }, null, 2) };
+  },
+  'Hashes': async s => { const h = await hashes(te.encode(s)); return { html: kvBlock(Object.entries(h)), text: Object.entries(h).map(([k, v]) => `${k}  ${v}`).join('\n') }; },
+  'Timestamp': s => {
+    const t = s.trim(); let ms;
+    if (!t) ms = Date.now(); else if (/^-?\d{1,20}(\.\d+)?$/.test(t)) { const n = +t; ms = Math.abs(n) >= 1e14 ? n / 1000 : Math.abs(n) >= 1e11 ? n : n * 1000; }
+    else ms = Date.parse(t);
+    if (isNaN(ms)) throw new Error('Enter a Unix timestamp (s / ms / µs) or a date string');
+    const rows = tsTable(ms);
+    return { html: (!t ? '<p class="muted" style="margin:0 0 6px">Current time (input is empty):</p>' : '') + kvBlock(rows), text: rows.map(r => r.join(': ')).join('\n') };
+  },
+  'JSON pretty': s => JSON.stringify(JSON.parse(s), null, 2),
+  'JSON minify': s => JSON.stringify(JSON.parse(s)),
+  'UUID': () => Array.from({ length: 10 }, () => crypto.randomUUID ? crypto.randomUUID() : '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16))).join('\n'),
+  'Password': s => {
+    const len = Math.min(256, Math.max(8, parseInt(s) || 24));
+    const sets = 'ABCDEFGHJKLMNPQRSTUVWXYZ abcdefghijkmnopqrstuvwxyz 23456789 !@#$%^&*-_=+?'.split(' ');
+    const all = sets.join(''), gen = () => { const r = crypto.getRandomValues(new Uint32Array(len)); const p = [...r].map(x => all[x % all.length]); sets.forEach((set, i) => { p[r[i] % len] = set[crypto.getRandomValues(new Uint32Array(1))[0] % set.length]; }); return p.join(''); };
+    return Array.from({ length: 8 }, gen).join('\n') + `\n\n(length ${len} — type a number in the input to change)`;
+  },
+};
+const GROUPS = [['Encode / decode', ['Base64 ↑', 'Base64 ↓', 'Base64URL ↑', 'URL ↑', 'URL ↓', 'Hex ↑', 'Hex ↓', 'HTML ↑', 'HTML ↓', 'ROT13', 'Punycode ↓', 'Punycode ↑']],
+                ['Inspect', ['JWT', 'Hashes', 'Timestamp', 'JSON pretty', 'JSON minify']], ['Generate', ['UUID', 'Password']]];
+let op = 'Base64 ↓', outText = '';
+$('#ops').innerHTML = GROUPS.map(([g, list]) => `<span class="muted" style="font-size:12px;align-self:center;margin-left:6px">${g}</span>${list.map(o => `<span class="chip ${o === op ? 'on' : ''}" data-op="${o}">${o.replace('↑', '<span class="muted">encode</span>').replace('↓', '<span class="muted">decode</span>')}</span>`).join('')}`).join('');
+$('#ops').onclick = e => { const c = e.target.closest('.chip'); if (!c) return; op = c.dataset.op; $$('#ops .chip').forEach(x => x.classList.toggle('on', x === c)); run(); };
+
+async function run(){
+  const s = $('#in').value;
+  $('#fileLbl').hidden = op !== 'Hashes';
+  $('#inInfo').textContent = s ? `${s.length.toLocaleString()} chars · ${te.encode(s).length.toLocaleString()} bytes` : '';
+  try {
+    const r = await OPS[op](s);
+    if (typeof r === 'object') { $('#outWrap').innerHTML = r.html; outText = r.text; }
+    else { $('#outWrap').innerHTML = '<pre id="out" style="min-height:240px"></pre>'; $('#out').textContent = r; outText = r; }
+    $('#outInfo').textContent = '';
+  } catch (e) {
+    $('#outWrap').innerHTML = `<div class="err" style="margin-top:0">${esc(e.message || 'Invalid input for this operation')}</div>`; outText = '';
+  }
+}
+$('#in').addEventListener('input', run);
+$('#cp').onclick = e => copyText(outText, e.target);
+$('#swap').onclick = () => { if (outText) { $('#in').value = outText; run(); } };
+$('#clr').onclick = () => { $('#in').value = ''; run(); };
+$('#file').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return; e.target.value = '';
+  $('#outWrap').innerHTML = '<span class="spin"></span> Hashing…';
+  const h = await hashes(new Uint8Array(await f.arrayBuffer()));
+  $('#outWrap').innerHTML = `<p style="margin:0 0 6px"><b class="mono">${esc(f.name)}</b> <span class="muted">${f.size.toLocaleString()} bytes</span></p>` + kvBlock(Object.entries(h)) +
+    `<div class="row"><a class="btn" href="https://www.virustotal.com/gui/file/${h['SHA-256']}" target="_blank" rel="noopener">Search on VirusTotal ↗</a></div><p class="note">The file never leaves your browser — only the hash is in the link.</p>`;
+  outText = Object.entries(h).map(([k, v]) => `${k}  ${v}`).join('\n');
+};
+run();
+</script>
+
+</div>
+</body>
+</html>

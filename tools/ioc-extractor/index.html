@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IOC Extractor &amp; Defanger · NetOps Toolkit</title>
+<meta name="description" content="Pull IPs, domains, URLs, emails, hashes, CVEs and ATT&amp;CK IDs out of any text — threat reports, logs, emails. Refang input, defang output. Fully offline.">
+<link rel="stylesheet" href="../../assets/style.css">
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="../../">← All tools</a>
+  <header class="top">
+    <div><h1>IOC Extractor &amp; Defanger</h1><p class="sub">Pull IPs, domains, URLs, emails, hashes, CVEs and ATT&amp;CK IDs out of any text — threat reports, logs, emails. Refang input, defang output. Fully offline.</p></div>
+    <button id="themeBtn" title="Toggle theme"></button>
+  </header>
+<script src="../../assets/common.js"></script>
+<section class="panel">
+  <label class="small" for="raw">Paste text (reports, logs, emails, chat…)</label>
+  <textarea id="raw" spellcheck="false" style="min-height:200px"></textarea>
+  <div class="row">
+    <button class="primary" id="go">Extract</button>
+    <label class="btn" for="file">Load file…</label><input type="file" id="file" accept=".txt,.log,.csv,.json,.eml,.md,.html,text/*">
+    <button id="sample">Load sample</button>
+    <span style="flex:1"></span>
+    <label class="chk"><input type="checkbox" id="optDefang" checked> Defang output</label>
+    <label class="chk"><input type="checkbox" id="optPriv"> Include private/reserved IPs</label>
+    <label class="chk"><input type="checkbox" id="optFiles"> Keep file-like names (e.g. update.exe)</label>
+  </div>
+</section>
+<div id="out"></div>
+
+<script>
+// Common gTLDs + every 2-letter ccTLD pattern; file extensions are filtered separately.
+const GTLD = new Set(`com net org info biz io co ai app dev xyz top online site shop store tech cloud me tv cc ws pro mobi name club live link click icu buzz fun space website email world today news blog page vip work life cyou cfd sbs lol mom bond rest quest monster beauty hair skin cam surf zip mov gov edu mil int arpa onion bit eth crypto asia tel travel jobs museum aero coop cat`.split(/\s+/));
+const FILE_EXT = new Set(`exe dll sys bat cmd ps1 psm1 vbs vbe js jse jar py pyc sh bin elf so dylib msi msp lnk scr cpl hta wsf doc docx docm xls xlsx xlsm ppt pptx pdf rtf txt log csv json xml html htm php asp aspx jsp cfg conf ini dat tmp bak png jpg jpeg gif bmp svg ico zip rar 7z gz tar tgz iso img dmg apk ipa md yml yaml toml lock out db sql`.split(/\s+/));
+
+function refang(t){
+  return t.replace(/h[xX]{2}p(s?)/g, 'http$1').replace(/\[\s*(?:\.|dot)\s*\]|\(\s*(?:\.|dot)\s*\)|\{\s*(?:\.|dot)\s*\}/gi, '.')
+    .replace(/\[\s*:\s*\]/g, ':').replace(/\[\s*\/\s*\]/g, '/').replace(/\[\s*(?:@|at)\s*\]|\(\s*(?:@|at)\s*\)/gi, '@')
+    .replace(/\s+\[dot\]\s+/gi, '.').replace(/\\\./g, '.');
+}
+const defang = (s, type) => {
+  if (type === 'url') return s.replace(/^http/i, 'hxxp').replace(/\./g, '[.]').replace('://', '[://]');
+  if (type === 'email') return s.replace('@', '[@]').replace(/\./g, '[.]');
+  if (type === 'ipv6') return s.replace(/:/g, '[:]');
+  return s.replace(/\./g, '[.]');
+};
+
+const RX = {
+  url:    /\b(?:https?|ftp|sftp|wss?):\/\/[^\s"'<>`)\]}]+/gi,
+  email:  /\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b/gi,
+  ipv4:   /\b(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}(?:\/(?:3[0-2]|[12]?\d))?\b/g,
+  ipv6:   /(?<![\w:])(?:[0-9a-f]{1,4}:){2,7}(?::|[0-9a-f]{1,4})|(?<![\w:])(?:[0-9a-f]{1,4}:)*::(?:[0-9a-f]{1,4}:)*[0-9a-f]{0,4}(?![\w:])/gi,
+  domain: /\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:xn--[a-z0-9-]+|[a-z]{2,24})\b/gi,
+  sha512: /\b[a-f0-9]{128}\b/gi, sha256: /\b[a-f0-9]{64}\b/gi, sha1: /\b[a-f0-9]{40}\b/gi, md5: /\b[a-f0-9]{32}\b/gi,
+  cve:    /\bCVE-\d{4}-\d{4,7}\b/gi,
+  attack: /\b(?:T|TA|S|G|M)\d{4}(?:\.\d{3})?\b/g,
+  btc:    /\b(?:bc1[ac-hj-np-z02-9]{25,59}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})\b/g,
+};
+const LABELS = { url: 'URLs', domain: 'Domains', ipv4: 'IPv4', ipv6: 'IPv6', email: 'Emails', md5: 'MD5', sha1: 'SHA-1', sha256: 'SHA-256', sha512: 'SHA-512', cve: 'CVE IDs', attack: 'MITRE ATT&CK', btc: 'Bitcoin addresses' };
+let result = {};
+
+function extract(){
+  const opt = { priv: $('#optPriv').checked, files: $('#optFiles').checked };
+  const text = refang($('#raw').value);
+  const r = {}; const add = (k, v) => (r[k] ||= new Set()).add(v);
+
+  (text.match(RX.url) || []).forEach(u => add('url', u.replace(/[.,;:!?]+$/, '')));
+  (text.match(RX.email) || []).forEach(e => add('email', e.toLowerCase()));
+  (text.match(RX.ipv4) || []).forEach(ip => { const base = ip.split('/')[0]; if (opt.priv || !v4Special(parseIPv4(base))) add('ipv4', ip); });
+  (text.match(RX.ipv6) || []).forEach(ip => { const n = parseIPv6(ip); if (n == null || n === 0n) return; if (!/[a-f]/i.test(ip) && ip.split(':').length < 4) return; if (opt.priv || v6Special(n) === 'Global unicast') add('ipv6', ip.toLowerCase()); });
+  const emailDomains = new Set([...(r.email || [])].map(e => e.split('@')[1]));
+  (text.match(RX.domain) || []).forEach(d => {
+    d = d.toLowerCase().replace(/\.$/, '');
+    const tld = d.split('.').pop();
+    if (parseIPv4(d) != null || /^\d+(\.\d+)+$/.test(d)) return;
+    if (!(GTLD.has(tld) || /^[a-z]{2}$/.test(tld) || tld.startsWith('xn--'))) return;
+    if (!opt.files && FILE_EXT.has(tld) && d.split('.').length === 2) return;   // update.zip, run.sh, notes.md
+    add('domain', d);
+  });
+  // hashes: longest first so a SHA-256 isn't also counted as part of something else
+  const hashTaken = new Set();
+  for (const k of ['sha512', 'sha256', 'sha1', 'md5']) (text.match(RX[k]) || []).forEach(h => { h = h.toLowerCase(); if (![...hashTaken].some(x => x.includes(h)) && /\d/.test(h) && /[a-f]/.test(h)) { add(k, h); hashTaken.add(h); } });
+  (text.match(RX.cve) || []).forEach(c => add('cve', c.toUpperCase()));
+  (text.match(RX.attack) || []).forEach(t => add('attack', t));
+  (text.match(RX.btc) || []).forEach(b => { if (/\d/.test(b) && /[a-z]/.test(b) && /[A-Z]|^bc1/.test(b)) add('btc', b); });
+  // email domains are kept in Domains too (useful for blocking) — mark them
+  result = Object.fromEntries(Object.keys(LABELS).filter(k => r[k]?.size).map(k => [k, [...r[k]].sort()]));
+  result._emailDomains = emailDomains;
+  render();
+}
+
+function render(){
+  const df = $('#optDefang').checked;
+  const keys = Object.keys(LABELS).filter(k => result[k]);
+  const total = keys.reduce((s, k) => s + result[k].length, 0);
+  const show = (k, v) => df && ['url', 'domain', 'ipv4', 'ipv6', 'email'].includes(k) ? defang(v, k) : v;
+  if (!total) { $('#out').innerHTML = '<section class="panel muted">No indicators found.</section>'; return; }
+  $('#out').innerHTML = `<section class="panel">
+    <div class="row" style="margin-top:0"><b>${total}</b> indicators · ${keys.map(k => `<span class="b b-info">${LABELS[k]} ${result[k].length}</span>`).join(' ')}
+      <span style="flex:1"></span><button id="cpAll">Copy all</button><button id="csv">CSV</button><button id="json">JSON</button></div>
+    <div class="grid3" style="margin-top:12px;grid-template-columns:repeat(auto-fit,minmax(340px,1fr))">
+    ${keys.map(k => `<div class="card"><div class="t">${LABELS[k]} <span><span class="muted" style="font-weight:400">${result[k].length}</span> <button data-cp="${k}" style="padding:2px 8px;font-size:12px">Copy</button></span></div>
+      <div class="mono" style="font-size:12.5px;max-height:260px;overflow:auto">${result[k].map(v => `<div>${esc(show(k, v))}${k === 'domain' && result._emailDomains.has(v) ? ' <span class="muted">(email)</span>' : ''}${(k === 'ipv4' || k === 'domain') && !df ? ` <a href="../domain-intel/?q=${encodeURIComponent(v.split('/')[0])}" title="Lookup">↗</a>` : ''}${k === 'cve' ? ` <a href="https://nvd.nist.gov/vuln/detail/${v}" target="_blank" rel="noopener">↗</a>` : ''}</div>`).join('')}</div></div>`).join('')}
+    </div></section>`;
+  $$('[data-cp]').forEach(b => b.onclick = () => copyText(result[b.dataset.cp].map(v => show(b.dataset.cp, v)).join('\n'), b));
+  $('#cpAll').onclick = e => copyText(keys.map(k => `# ${LABELS[k]}\n` + result[k].map(v => show(k, v)).join('\n')).join('\n\n'), e.target);
+  $('#csv').onclick = () => download('iocs.csv', toCSV([['type', 'value'], ...keys.flatMap(k => result[k].map(v => [k, show(k, v)]))]), 'text/csv');
+  $('#json').onclick = () => download('iocs.json', JSON.stringify(Object.fromEntries(keys.map(k => [k, result[k].map(v => show(k, v))])), null, 2), 'application/json');
+}
+
+const SAMPLE = `Threat report — campaign "Paper Lantern" (sample data)
+Initial access via phishing from billing@invoice-portal[.]example-pay[.]com exploiting CVE-2024-21412 and cve-2023-36884.
+Payload hxxps://cdn-update[.]examplecdn[.]net/dl/update.exe (SHA256 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08)
+Second stage MD5: 5d41402abc4b2a76b9719d911017c592  SHA1 aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d
+C2 servers: 203.0.113[.]54, 198.51.100.23:8443, 2001:db8:85a3::8a2e:370:7334 and backup domain beacon.badexample[.]top
+Internal hosts touched: 10.20.30.40, 192.168.1.15 (dc01.corp.local)
+Techniques: T1566.001, T1059.001, T1105. Ransom note asks for BTC to bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq
+Dropped files: payload.dll, config.json, run.ps1`;
+
+$('#go').onclick = extract;
+$('#sample').onclick = () => { $('#raw').value = SAMPLE; extract(); };
+$('#optDefang').onchange = () => result && Object.keys(result).length && render();
+$('#optPriv').onchange = $('#optFiles').onchange = () => $('#raw').value && extract();
+$('#file').onchange = async e => { const f = e.target.files[0]; if (!f) return; $('#raw').value = await f.text(); e.target.value = ''; extract(); };
+</script>
+
+</div>
+</body>
+</html>

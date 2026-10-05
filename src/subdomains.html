@@ -1,0 +1,92 @@
+<!-- title: Subdomain Finder | desc: Passive subdomain discovery from Certificate Transparency logs, with optional live DNS resolution. -->
+<section class="panel">
+  <div class="row">
+    <input type="text" id="q" class="grow mono" placeholder="example.com" autocomplete="off" spellcheck="false">
+    <select id="src" aria-label="Source">
+      <option value="crtsh">crt.sh</option>
+      <option value="certspotter">CertSpotter</option>
+    </select>
+    <button class="primary" id="go">Find subdomains</button>
+  </div>
+  <p class="note">Passive only — reads public CT logs, never touches the target. crt.sh can be slow (30s+) for large domains; CertSpotter's free tier is rate-limited and returns recent certificates only.</p>
+</section>
+<div id="out"></div>
+
+<script>
+let subs = [];   // {name, first, last, issuers:Set, count, wildcard, ips}
+
+async function fetchCrtsh(d){
+  const r = await fetch(`https://crt.sh/?q=${encodeURIComponent('%.' + d)}&output=json`);
+  if (!r.ok) throw new Error(`crt.sh returned HTTP ${r.status} (it is often overloaded — retry or switch source)`);
+  const j = await r.json();
+  return j.map(x => ({ names: String(x.name_value).split('\n'), from: x.not_before, to: x.not_after, issuer: (x.issuer_name.match(/O=([^,]+)/) || [, x.issuer_name])[1].replace(/"/g, '') }));
+}
+async function fetchCertspotter(d){
+  const out = []; let after = '';
+  for (let page = 0; page < 10; page++) {
+    const r = await fetch(`https://api.certspotter.com/v1/issuances?domain=${encodeURIComponent(d)}&include_subdomains=true&expand=dns_names&expand=issuer${after ? '&after=' + after : ''}`);
+    if (r.status === 429) { if (out.length) break; throw new Error('CertSpotter rate limit reached — try again later or use crt.sh'); }
+    if (!r.ok) throw new Error(`CertSpotter returned HTTP ${r.status}`);
+    const j = await r.json(); if (!j.length) break;
+    j.forEach(x => out.push({ names: x.dns_names, from: x.not_before, to: x.not_after, issuer: x.issuer?.friendly_name || x.issuer?.name || '' }));
+    after = j[j.length - 1].id; if (j.length < 100) break;
+  }
+  return out;
+}
+
+async function run(){
+  const d = cleanHost($('#q').value); if (!d) return;
+  setParam('q', d);
+  $('#out').innerHTML = `<section class="panel"><span class="spin"></span> Querying Certificate Transparency logs for <b class="mono">${esc(d)}</b>…</section>`;
+  try {
+    const certs = $('#src').value === 'crtsh' ? await fetchCrtsh(d) : await fetchCertspotter(d);
+    const map = new Map();
+    for (const c of certs) for (let n of c.names) {
+      n = n.trim().toLowerCase(); if (!n) continue;
+      const wildcard = n.startsWith('*.'); if (wildcard) n = n.slice(2);
+      if (n !== d && !n.endsWith('.' + d)) continue;
+      const s = map.get(n) || { name: n, first: c.from, last: c.to, issuers: new Set(), count: 0, wildcard: false, ips: null };
+      if (c.from < s.first) s.first = c.from; if (c.to > s.last) s.last = c.to;
+      s.issuers.add(c.issuer); s.count++; s.wildcard ||= wildcard;
+      map.set(n, s);
+    }
+    subs = [...map.values()].sort((a, b) => a.name.split('.').reverse().join('.').localeCompare(b.name.split('.').reverse().join('.')));
+    render(certs.length);
+  } catch (e) {
+    $('#out').innerHTML = `<div class="err">${esc(e.message)}${/fetch/i.test(e.message) ? ' — the CT service may be down or blocking browser requests. Try the other source.' : ''}</div>`;
+  }
+}
+
+function render(certCount){
+  const now = new Date().toISOString();
+  $('#out').innerHTML = `<section class="panel">
+    <div class="row" style="margin-top:0"><b>${subs.length}</b> unique names from ${certCount != null ? certCount.toLocaleString() + ' certificates' : 'CT logs'}
+      <input type="search" id="f" class="grow" placeholder="Filter…">
+      <button id="resolve">Resolve all (DNS)</button><button id="cp">Copy list</button><button id="csv">CSV</button></div>
+    <div class="tablewrap" style="margin-top:10px"><table><thead><tr><th>Subdomain</th><th>Resolves to</th><th>First cert</th><th>Latest expiry</th><th>Certs</th><th>Issuers</th></tr></thead><tbody id="tb"></tbody></table></div></section>`;
+  const draw = () => {
+    const q = $('#f').value.toLowerCase();
+    $('#tb').innerHTML = subs.filter(s => s.name.includes(q)).map(s => `<tr>
+      <td class="mono"><a href="../dns-lookup/?q=${encodeURIComponent(s.name)}">${esc(s.name)}</a>${s.wildcard ? ' <span class="b b-info">wildcard</span>' : ''}</td>
+      <td class="mono" style="font-size:12px">${s.ips == null ? '<span class="muted">—</span>' : s.ips === 'nx' ? '<span class="b b-mute">no record</span>' : s.ips.map(ip => `<a href="../domain-intel/?q=${encodeURIComponent(ip)}">${esc(ip)}</a>`).join('<br>')}</td>
+      <td>${esc(String(s.first).slice(0, 10))}</td><td>${s.last < now ? `<span class="muted">${esc(String(s.last).slice(0, 10))}</span>` : esc(String(s.last).slice(0, 10))}</td>
+      <td>${s.count}</td><td class="muted" style="font-size:12px">${esc([...s.issuers].join(', '))}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">Nothing found.</td></tr>';
+  };
+  draw();
+  $('#f').oninput = draw;
+  $('#cp').onclick = e => copyText(subs.map(s => s.name).join('\n'), e.target);
+  $('#csv').onclick = () => download(`subdomains-${cleanHost($('#q').value)}.csv`, toCSV([['subdomain','resolves_to','first_cert','latest_expiry','cert_count','issuers'], ...subs.map(s => [s.name, Array.isArray(s.ips) ? s.ips.join(' ') : '', s.first, s.last, s.count, [...s.issuers].join('; ')])]), 'text/csv');
+  $('#resolve').onclick = async e => {
+    const b = e.target; b.disabled = true;
+    let i = 0, done = 0;
+    const worker = async () => { while (i < subs.length) { const s = subs[i++];
+      try { const j = await doh(s.name, 'A'); const ips = (j.Answer || []).filter(a => a.type === 1).map(a => a.data); s.ips = ips.length ? ips : 'nx'; } catch { s.ips = 'nx'; }
+      b.textContent = `Resolving ${++done}/${subs.length}`; if (done % 10 === 0) draw(); } };
+    await Promise.all(Array.from({ length: 6 }, worker));
+    b.textContent = 'Resolved ✓'; draw();
+  };
+}
+$('#go').onclick = run;
+$('#q').addEventListener('keydown', e => e.key === 'Enter' && run());
+if (getParam('q')) { $('#q').value = getParam('q'); run(); }
+</script>

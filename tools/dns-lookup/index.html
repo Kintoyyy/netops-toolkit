@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DNS Lookup · NetOps Toolkit</title>
+<meta name="description" content="Query any record type over DNS-over-HTTPS (Cloudflare / Google), compare resolvers, check DNSSEC and reverse DNS.">
+<link rel="stylesheet" href="../../assets/style.css">
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="../../">← All tools</a>
+  <header class="top">
+    <div><h1>DNS Lookup</h1><p class="sub">Query any record type over DNS-over-HTTPS (Cloudflare / Google), compare resolvers, check DNSSEC and reverse DNS.</p></div>
+    <button id="themeBtn" title="Toggle theme"></button>
+  </header>
+<script src="../../assets/common.js"></script>
+<section class="panel">
+  <div class="row">
+    <input type="text" id="q" class="grow mono" placeholder="example.com or 8.8.8.8" autocomplete="off" spellcheck="false">
+    <select id="prov" aria-label="Resolver">
+      <option value="cloudflare">Cloudflare 1.1.1.1</option>
+      <option value="google">Google 8.8.8.8</option>
+      <option value="both">Compare both</option>
+    </select>
+    <button class="primary" id="go">Lookup</button>
+  </div>
+  <div class="row chips" id="types"></div>
+  <p class="note">Enter an IP to get its PTR record automatically. Tip: link directly with <span class="mono">?q=domain</span>.</p>
+</section>
+<div id="out"></div>
+
+<script>
+const TYPES = ['A','AAAA','CNAME','MX','NS','TXT','SOA','CAA','SRV','HTTPS','DS','DNSKEY','PTR'];
+const DEF = new Set(['A','AAAA','CNAME','MX','NS','TXT','SOA','CAA']);
+$('#types').innerHTML = TYPES.map(t => `<span class="chip ${DEF.has(t) ? 'on' : ''}" data-t="${t}">${t}</span>`).join('') +
+  `<span class="chip" data-all="1">All</span>`;
+$('#types').onclick = e => {
+  const c = e.target.closest('.chip'); if (!c) return;
+  if (c.dataset.all) { const on = !$$('#types .chip[data-t]').every(x => x.classList.contains('on')); $$('#types .chip[data-t]').forEach(x => x.classList.toggle('on', on)); return; }
+  c.classList.toggle('on');
+};
+
+function fmtData(a){
+  if (a.type === 16) return esc(txtJoin(a.data));
+  return esc(a.data);
+}
+function answersKey(j){ return (j.Answer || []).map(a => `${a.type}|${a.data}`).sort().join('\n'); }
+
+async function run(){
+  let name = cleanHost($('#q').value); if (!name) return;
+  setParam('q', name);
+  let types = $$('#types .chip.on[data-t]').map(c => c.dataset.t);
+  if (ipKind(name)) { name = ptrName(name); types = ['PTR']; }
+  const provs = $('#prov').value === 'both' ? ['cloudflare', 'google'] : [$('#prov').value];
+  $('#out').innerHTML = `<section class="panel"><span class="spin"></span> Querying ${types.length} record type(s)…</section>`;
+
+  const jobs = types.flatMap(t => provs.map(p => doh(name, t, p).then(j => ({t, p, j}), e => ({t, p, e}))));
+  const res = await Promise.all(jobs);
+  const err = res.find(r => r.e);
+  if (err && res.every(r => r.e)) { $('#out').innerHTML = `<div class="err">Lookup failed: ${esc(err.e.message)}. Your network or browser may be blocking DNS-over-HTTPS.</div>`; return; }
+
+  const first = res.find(r => r.j)?.j;
+  const status = first ? RCODE[first.Status] ?? first.Status : '?';
+  const ad = res.some(r => r.j?.AD);
+  let html = `<section class="panel"><div class="row" style="margin-top:0">
+    <b class="mono">${esc(name)}</b>
+    <span class="b ${status === 'NOERROR' ? 'b-ok' : 'b-bad'}">${esc(status)}</span>
+    <span class="b ${ad ? 'b-ok' : 'b-mute'}">${ad ? 'DNSSEC validated' : 'DNSSEC: not validated'}</span>
+    <span class="muted">${provs.map(p => p + ' ' + (res.filter(r => r.p === p && r.j).reduce((m, r) => Math.max(m, r.j._ms), 0)) + ' ms').join(' · ')}</span>
+    <span style="flex:1"></span>
+    <a class="btn" href="../domain-intel/?q=${encodeURIComponent(cleanHost($('#q').value))}">RDAP / WHOIS →</a>
+  </div>`;
+
+  html += `<div class="tablewrap" style="margin-top:12px"><table><thead><tr><th>Type</th>${provs.length > 1 ? '<th>Resolver</th>' : ''}<th>Name</th><th>TTL</th><th>Data</th></tr></thead><tbody>`;
+  let rows = 0;
+  for (const t of types) {
+    const per = provs.map(p => res.find(r => r.t === t && r.p === p));
+    const diff = provs.length > 1 && per.every(r => r.j) && answersKey(per[0].j) !== answersKey(per[1].j);
+    for (const r of per) {
+      if (r.e) { html += `<tr><td><b>${t}</b></td>${provs.length > 1 ? `<td>${r.p}</td>` : ''}<td colspan="3" class="muted">Error: ${esc(r.e.message)}</td></tr>`; rows++; continue; }
+      const ans = (r.j.Answer || []).filter(a => RRTYPE[a.type] === t || a.type === 5);
+      if (!ans.length) continue;
+      ans.forEach((a, i) => {
+        html += `<tr><td><b>${i ? '' : esc(RRTYPE[a.type] || a.type)}</b>${!i && diff ? ' <span class="b b-warn">differs</span>' : ''}</td>${provs.length > 1 ? `<td class="muted">${i ? '' : r.p}</td>` : ''}
+          <td class="mono">${esc(a.name)}</td><td>${a.TTL}</td><td class="mono">${fmtData(a)}${a.type === 1 || a.type === 28 ? ` <a href="../domain-intel/?q=${encodeURIComponent(a.data)}" title="IP intel">↗</a>` : ''}</td></tr>`;
+        rows++;
+      });
+    }
+  }
+  if (!rows) html += `<tr><td colspan="5" class="muted">No records returned for the selected types.</td></tr>`;
+  html += `</tbody></table></div>`;
+  const auth = (first?.Authority || []);
+  if (auth.length && !rows) html += `<p class="note">Authority: <span class="mono">${esc(auth.map(a => a.data).join(' | '))}</span></p>`;
+  html += `</section>`;
+  $('#out').innerHTML = html;
+}
+$('#go').onclick = run;
+$('#q').addEventListener('keydown', e => e.key === 'Enter' && run());
+if (getParam('q')) { $('#q').value = getParam('q'); run(); }
+</script>
+
+</div>
+</body>
+</html>

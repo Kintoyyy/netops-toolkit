@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Email Security Check · NetOps Toolkit</title>
+<meta name="description" content="Audit a domain&#x27;s MX, SPF (with recursive DNS-lookup count), DMARC, DKIM selectors, MTA-STS, TLS-RPT and BIMI.">
+<link rel="stylesheet" href="../../assets/style.css">
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="../../">← All tools</a>
+  <header class="top">
+    <div><h1>Email Security Check</h1><p class="sub">Audit a domain&#x27;s MX, SPF (with recursive DNS-lookup count), DMARC, DKIM selectors, MTA-STS, TLS-RPT and BIMI.</p></div>
+    <button id="themeBtn" title="Toggle theme"></button>
+  </header>
+<script src="../../assets/common.js"></script>
+<section class="panel">
+  <div class="row">
+    <input type="text" id="q" class="grow mono" placeholder="example.com" autocomplete="off" spellcheck="false">
+    <button class="primary" id="go">Check</button>
+  </div>
+  <details style="margin-top:10px">
+    <summary class="muted" style="cursor:pointer">DKIM selectors to probe</summary>
+    <input type="text" id="sels" class="mono" style="width:100%;margin-top:6px" value="default, google, selector1, selector2, k1, k2, k3, s1, s2, dkim, mail, smtp, mx, key1, key2, mandrill, mailjet, zoho, everlytickey1, pm, sendgrid, s1024, s2048, fm1, fm2, fm3, protonmail, protonmail2, protonmail3">
+    <p class="note">DKIM selectors can't be enumerated — only these names are tried. Find the real one in an email's <span class="mono">DKIM-Signature: s=</span> tag.</p>
+  </details>
+</section>
+<div id="out"></div>
+
+<script>
+const badge = (cls, t) => `<span class="b b-${cls}">${esc(t)}</span>`;
+
+async function walkSpf(domain, depth = 0, seen = new Set()){
+  const node = { domain, record: null, lookups: 0, children: [], issues: [] };
+  if (seen.has(domain)) { node.issues.push('Include loop detected'); return node; }
+  seen.add(domain);
+  let recs;
+  try { recs = (await dohTxt(domain)).filter(t => /^v=spf1(\s|$)/i.test(t)); }
+  catch (e) { node.issues.push('Lookup error: ' + e.message); return node; }
+  if (!recs.length) { node.issues.push('No SPF record'); return node; }
+  if (recs.length > 1) node.issues.push('Multiple SPF records — receivers will return permerror');
+  node.record = recs[0];
+  for (const term of recs[0].split(/\s+/).slice(1)) {
+    if (!term) continue;
+    const m = term.match(/^([+\-~?]?)(include|a|mx|ptr|exists|redirect|ip4|ip6|all|exp)(?:[:=\/](.*))?$/i);
+    if (!m) { node.issues.push(`Unknown term “${term}”`); continue; }
+    const mech = m[2].toLowerCase(), arg = m[3];
+    if (['include', 'a', 'mx', 'ptr', 'exists', 'redirect'].includes(mech)) node.lookups++;
+    if (mech === 'ptr') node.issues.push('ptr mechanism is deprecated (RFC 7208)');
+    if ((mech === 'include' || mech === 'redirect') && arg && depth < 10 && !arg.includes('%{'))
+      node.children.push({ mech, node: await walkSpf(arg, depth + 1, seen) });
+  }
+  return node;
+}
+const spfTotal = n => n.lookups + n.children.reduce((s, c) => s + spfTotal(c.node), 0);
+function spfTree(n, depth = 0){
+  return `<div style="margin-left:${depth * 16}px;padding:4px 0;border-left:${depth ? '2px solid var(--border)' : 'none'};padding-left:${depth ? 8 : 0}px">
+    <span class="mono"><b>${esc(n.domain)}</b></span> <span class="muted">(${n.lookups} lookup${n.lookups === 1 ? '' : 's'})</span>
+    ${n.record ? `<div class="mono muted" style="font-size:12px">${esc(n.record)}</div>` : ''}
+    ${n.issues.map(i => `<div>${badge('warn', '!')} ${esc(i)}</div>`).join('')}
+    ${n.children.map(c => spfTree(c.node, depth + 1)).join('')}</div>`;
+}
+function parseTags(rec){ const o = {}; rec.split(';').map(s => s.trim()).filter(Boolean).forEach(kv => { const i = kv.indexOf('='); if (i > 0) o[kv.slice(0, i).trim().toLowerCase()] = kv.slice(i + 1).trim(); }); return o; }
+function keyBits(p){ const bytes = Math.floor(p.replace(/\s/g, '').length * 3 / 4); return bytes >= 550 ? 4096 : bytes >= 290 ? 2048 : bytes >= 160 ? 1024 : bytes >= 90 ? 512 : bytes ? '<512' : 0; }
+
+async function run(){
+  const d = cleanHost($('#q').value); if (!d) return;
+  setParam('q', d);
+  $('#out').innerHTML = `<section class="panel"><span class="spin"></span> Checking ${esc(d)}…</section>`;
+  try {
+    const sels = $('#sels').value.split(/[\s,]+/).filter(Boolean);
+    const [mx, spf, dmarc, sts, tlsrpt, bimi, dkim] = await Promise.all([
+      doh(d, 'MX'),
+      walkSpf(d),
+      dohTxt('_dmarc.' + d),
+      dohTxt('_mta-sts.' + d),
+      dohTxt('_smtp._tls.' + d),
+      dohTxt('default._bimi.' + d),
+      Promise.all(sels.map(s => dohTxt(`${s}._domainkey.${d}`).then(t => ({ s, t }), () => ({ s, t: [] })))),
+    ]);
+    const cards = [];
+
+    // MX
+    const mxs = (mx.Answer || []).filter(a => a.type === 15).map(a => a.data.split(' ')).sort((a, b) => a[0] - b[0]);
+    const nullMx = mxs.length === 1 && mxs[0][1] === '.';
+    cards.push({ t: 'MX', st: nullMx ? ['info', 'Null MX'] : mxs.length ? ['ok', `${mxs.length} host${mxs.length > 1 ? 's' : ''}`] : ['bad', 'None'],
+      body: nullMx ? 'Domain explicitly accepts no mail (RFC 7505).' : mxs.length ? `<table><tbody>${mxs.map(m => `<tr><td>${m[0]}</td><td class="mono">${esc(m[1])}</td></tr>`).join('')}</tbody></table>` : 'No MX records — mail falls back to the A record, if any.' });
+
+    // SPF
+    const total = spfTotal(spf);
+    const all = spf.record?.match(/\s([+\-~?]?)all\b/i);
+    const q = all ? (all[1] || '+') : null;
+    let spfSt = !spf.record ? ['bad', 'Missing'] : total > 10 ? ['bad', `${total}/10 lookups`] : q === '-' ? ['ok', 'Strict (-all)'] : q === '~' ? ['warn', 'Soft (~all)'] : q ? ['bad', `Weak (${q}all)`] : spf.record.includes('redirect=') ? ['info', 'Redirect'] : ['warn', 'No all'];
+    cards.push({ t: 'SPF', st: spfSt, body: spf.record ? `<div class="muted" style="margin-bottom:6px">Total DNS lookups: <b style="color:var(--${total > 10 ? 'bad' : total > 8 ? 'warn' : 'ok'})">${total}</b> / 10 limit</div>${spfTree(spf)}` : 'No <span class="mono">v=spf1</span> TXT record. Anyone can spoof this domain in the envelope sender.' });
+
+    // DMARC
+    const dm = dmarc.filter(t => /^v=DMARC1/i.test(t));
+    if (!dm.length) cards.push({ t: 'DMARC', st: ['bad', 'Missing'], body: 'No <span class="mono">_dmarc</span> record. Spoofed From: headers are not rejected by policy.' });
+    else {
+      const tg = parseTags(dm[0]); const p = (tg.p || '').toLowerCase();
+      const st = dm.length > 1 ? ['bad', 'Multiple records'] : p === 'reject' ? ['ok', 'p=reject'] : p === 'quarantine' ? ['ok', 'p=quarantine'] : p === 'none' ? ['warn', 'p=none (monitor only)'] : ['bad', 'Invalid policy'];
+      const notes = [];
+      if (tg.pct && tg.pct !== '100') notes.push(`Only ${tg.pct}% of mail is subject to policy`);
+      if (!tg.rua) notes.push('No aggregate report address (rua)');
+      if (tg.sp && tg.sp !== p) notes.push(`Subdomain policy differs: sp=${tg.sp}`);
+      cards.push({ t: 'DMARC', st, body: `<div class="mono" style="font-size:12px;margin-bottom:6px">${esc(dm[0])}</div>
+        <div class="kv">${Object.entries({ Policy: tg.p, 'Subdomain policy': tg.sp || '(inherits p)', Percentage: tg.pct || '100', 'DKIM alignment': tg.adkim === 's' ? 'strict' : 'relaxed', 'SPF alignment': tg.aspf === 's' ? 'strict' : 'relaxed', 'Aggregate reports': tg.rua || '—', 'Forensic reports': tg.ruf || '—' }).map(([k, v]) => `<div>${k}</div><div>${esc(v)}</div>`).join('')}</div>
+        ${notes.map(n => `<div style="margin-top:4px">${badge('warn', '!')} ${esc(n)}</div>`).join('')}` });
+    }
+
+    // DKIM
+    const found = dkim.filter(x => x.t.some(t => /(^|;)\s*p=/i.test(t) || /v=DKIM1/i.test(t)));
+    cards.push({ t: 'DKIM', st: found.length ? ['ok', `${found.length} selector${found.length > 1 ? 's' : ''} found`] : ['mute', 'None found'],
+      body: found.length ? `<table><thead><tr><th>Selector</th><th>Type</th><th>Key</th></tr></thead><tbody>${found.map(x => { const tg = parseTags(x.t.join('')); const bits = tg.p ? keyBits(tg.p) : 0; return `<tr><td class="mono">${esc(x.s)}</td><td>${esc(tg.k || 'rsa')}</td><td>${!tg.p ? badge('bad', 'revoked (empty p=)') : (tg.k || 'rsa') === 'rsa' ? badge(bits >= 2048 ? 'ok' : 'warn', `~${bits}-bit`) : badge('ok', 'present')}</td></tr>`; }).join('')}</tbody></table>`
+        : `None of the ${sels.length} common selectors exist. That doesn't mean DKIM is off — check a real message's <span class="mono">s=</span> tag.` });
+
+    // MTA-STS / TLS-RPT / BIMI
+    const st1 = sts.find(t => /^v=STSv1/i.test(t)), tr = tlsrpt.find(t => /^v=TLSRPTv1/i.test(t)), bm = bimi.find(t => /^v=BIMI1/i.test(t));
+    cards.push({ t: 'MTA-STS', st: st1 ? ['ok', 'Enabled'] : ['mute', 'Not set'], body: st1 ? `<div class="mono" style="font-size:12px">${esc(st1)}</div><a href="https://mta-sts.${esc(d)}/.well-known/mta-sts.txt" target="_blank" rel="noopener">View policy file ↗</a>` : 'Enforces TLS for inbound SMTP. Optional but recommended.' });
+    cards.push({ t: 'TLS-RPT', st: tr ? ['ok', 'Enabled'] : ['mute', 'Not set'], body: tr ? `<div class="mono" style="font-size:12px">${esc(tr)}</div>` : 'Receives reports on SMTP TLS failures. Optional.' });
+    cards.push({ t: 'BIMI', st: bm ? ['ok', 'Enabled'] : ['mute', 'Not set'], body: bm ? `<div class="mono" style="font-size:12px">${esc(bm)}</div>` : 'Brand logo in supporting inboxes. Requires DMARC enforcement.' });
+
+    const spoofable = !spf.record || !dm.length || (parseTags(dm[0] || '').p || '').toLowerCase() === 'none';
+    $('#out').innerHTML = `<section class="panel">
+      <div class="row" style="margin-top:0"><b class="mono" style="font-size:15px">${esc(d)}</b>
+        ${spoofable ? badge('bad', 'Spoofable') : badge('ok', 'Spoofing protected')}
+        <span class="muted">${spoofable ? 'Missing SPF/DMARC or DMARC is p=none — attackers can send mail that appears to be from this domain.' : 'SPF and an enforcing DMARC policy are in place.'}</span></div>
+      <div class="grid3" style="margin-top:12px;grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">
+        ${cards.map(c => `<div class="card"><div class="t">${c.t} ${badge(c.st[0], c.st[1])}</div><div style="font-size:13px">${c.body}</div></div>`).join('')}
+      </div></section>`;
+  } catch (e) {
+    $('#out').innerHTML = `<div class="err">Check failed: ${esc(e.message)}</div>`;
+  }
+}
+$('#go').onclick = run;
+$('#q').addEventListener('keydown', e => e.key === 'Enter' && run());
+if (getParam('q')) { $('#q').value = getParam('q'); run(); }
+</script>
+
+</div>
+</body>
+</html>
