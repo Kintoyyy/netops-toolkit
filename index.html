@@ -66,6 +66,15 @@ a.card:hover{border-color:var(--accent);transform:translateY(-2px)}
 
 footer{border-top:1px solid var(--border);margin-top:40px;padding:22px 0 40px;color:var(--muted);font-size:13px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
 footer a{color:var(--muted)}
+/* slim scrollbars — WebKit/Blink get a custom 8px thumb, Firefox gets the native thin one */
+:root{--scroll:#c3cad3;--scroll-hover:#98a2ae}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--scroll:#363d47;--scroll-hover:#56606d}}
+:root[data-theme="dark"]{--scroll:#363d47;--scroll-hover:#56606d}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--scroll);background-clip:padding-box;border:2px solid transparent;border-radius:8px}
+::-webkit-scrollbar-thumb:hover{background:var(--scroll-hover);background-clip:padding-box;border-width:1px}
+@supports not selector(::-webkit-scrollbar){*{scrollbar-width:thin;scrollbar-color:var(--scroll) transparent}}
 </style>
 </head>
 <body>
@@ -85,8 +94,8 @@ footer a{color:var(--muted)}
   </nav>
 
   <section class="hero">
-    <h1>Small tools for <span>network, OSINT &amp; NOC</span> work.</h1>
-    <p>Browser-based OSINT and IT utilities for ISP operators, DNS admins and security folks. <b>Offline</b> tools never send your data anywhere; <b>online</b> tools query public APIs (DoH, RDAP, CT logs) straight from your browser.</p>
+    <h1>Your <span>network toolbox</span>, in the browser.</h1>
+    <p>Everyday utilities for ISP operators, network engineers, DNS admins and security teams. <b>Offline</b> tools never send your data anywhere; <b>online</b> tools query public APIs (DoH, RDAP, RIPEstat, CT logs) straight from your browser.</p>
     <div class="points"><span>No backend</span><span>No sign-up</span><span>No tracking</span><span>Open source</span></div>
   </section>
 
@@ -128,7 +137,11 @@ const TOOLS = [
   { name: 'IOC Extractor & Defanger', href: 'tools/ioc-extractor/', tags: ['Security', 'OSINT'], icon: 'target', mode: 'offline',
     desc: 'Pull IPs, domains, URLs, emails, hashes, CVEs and ATT&CK IDs out of reports or logs. Refang input, defang output.' },
   { name: 'Subnet Calculator', href: 'tools/subnet-calc/', tags: ['Network'], icon: 'calc', mode: 'offline',
-    desc: 'IPv4 & IPv6 subnet math, VLSM split, CIDR aggregation, IP-in-range checks and MikroTik address-list export.' },
+    desc: 'IPv4 & IPv6 subnet math, splitting, VLSM planner, CIDR aggregation, subtraction, overlap finder, prefix cheat sheet and MikroTik export.' },
+  { name: 'Subnet Visualizer', href: 'tools/subnet-visualizer/', tags: ['Network'], icon: 'grid', mode: 'offline',
+    desc: 'Design address plans visually: split and join subnets, add notes and colors, see a block map, auto-allocate from host counts and share by link.' },
+  { name: 'BGP Toolkit', href: 'tools/bgp-toolkit/', tags: ['Network'], icon: 'route', mode: 'online',
+    desc: 'ASN and prefix lookups, RPKI, looking-glass AS paths, AS-path and neighbour graphs, prefix-list generator, community decoder and AS-path regex tester.' },
   { name: 'Blocklist Converter', href: 'tools/blocklist-converter/', tags: ['DNS', 'Network', 'Security'], icon: 'filter', mode: 'offline',
     desc: 'Convert hosts / Adblock / plain lists into BIND RPZ, Unbound, dnsmasq, MikroTik, AdGuard/Pi-hole, Squid or ipset.' },
   { name: 'PCAP Analyzer', href: 'tools/pcap-analyzer/', tags: ['Network', 'Security'], icon: 'chart', mode: 'offline',
@@ -166,6 +179,8 @@ const ICONS = {
   mail:   '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 6-10 7L2 6"/>',
   inbox:  '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
   target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+  grid:   '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 12h18M12 3v18M7.5 12v9"/>',
+  route:  '<circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="18" cy="19" r="2"/><path d="M6 17V9a4 4 0 0 1 4-4h6M8 19h8"/>',
   calc:   '<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M8 6h8M8 11h.01M12 11h.01M16 11h.01M8 15h.01M12 15h.01M16 15h.01M8 19h8"/>',
   filter: '<path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/>',
   chip:   '<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/>',

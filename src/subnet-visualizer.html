@@ -1,0 +1,179 @@
+<!-- title: Subnet Visualizer | desc: Design network layouts visually — split and join subnets, add notes and colors, see the address space as a block map, auto-allocate from host counts and share the layout as a link. | js: netcalc -->
+<style>
+#vt td.sj{width:24px;min-width:24px;padding:0;text-align:center;vertical-align:middle;cursor:pointer;color:#1b1f24;font-size:11.5px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;border:1px solid var(--panel);user-select:none}
+#vt td.sj span{writing-mode:vertical-rl;display:inline-block;padding:4px 0}
+#vt td.split{background:#f1937a} #vt td.split:hover{background:#e8765a}
+#vt td.join{background:#79b4da} #vt td.join:hover{background:#5a9fcc}
+#vt td.split.max{cursor:default;opacity:.55}
+#vt th.sjh{text-align:right;white-space:nowrap} #vt th.sjh .s{color:#e8765a} #vt th.sjh .j{color:#4a95c7}
+#vt td{white-space:nowrap;vertical-align:middle} #vt td.note{width:100%;min-width:160px}
+#vt input.note{width:100%;border:1px solid transparent;background:transparent;padding:4px 6px;font:inherit;color:var(--text)}
+#vt input.note:hover,#vt input.note:focus{border-color:var(--border);background:var(--code-bg)}
+.sw{width:16px;height:16px;border-radius:50%;border:1px solid var(--border);cursor:pointer;padding:0;vertical-align:middle}
+#map{display:flex;height:46px;border-radius:8px;overflow:hidden;border:1px solid var(--border);margin-top:12px}
+#map div{min-width:2px;border-right:1px solid var(--panel);display:flex;align-items:center;justify-content:center;font-size:11px;overflow:hidden;white-space:nowrap;cursor:pointer;color:var(--text)}
+#map div:last-child{border-right:none}
+#vt tr.hl td:not(.sj){outline:2px solid var(--accent);outline-offset:-2px}
+</style>
+<section class="panel">
+  <div class="row" style="margin-top:0;align-items:flex-end">
+    <div><label class="small" for="addr">Network address</label><input type="text" id="addr" class="mono" value="10.0.0.0" style="width:230px" spellcheck="false" autocomplete="off"></div>
+    <div style="padding-bottom:8px">/</div>
+    <div><label class="small" for="size">Network size</label><input type="number" id="size" class="mono" value="16" min="0" max="128" style="width:80px"></div>
+    <button class="primary" id="go">Go</button>
+    <span style="flex:1"></span>
+    <button id="share">Copy shareable URL</button><button id="csv">CSV</button><button id="txt">Copy as text</button><button id="allocBtn">Auto-allocate…</button><button id="reset">Reset</button>
+  </div>
+  <div id="allocBox" hidden style="margin-top:12px">
+    <label class="small" for="alloc">One subnet per line: a name and the hosts it needs (allocated largest-first), or a name and an exact CIDR.</label>
+    <textarea id="alloc" spellcheck="false" style="min-height:110px" placeholder="Servers 120&#10;Users 500&#10;Guest Wi-Fi 250&#10;Mgmt 10.0.255.0/24&#10;WAN link 2"></textarea>
+    <div class="row"><button class="primary" id="allocGo">Allocate</button><span class="muted">Replaces the current layout.</span></div>
+  </div>
+  <div id="msg"></div>
+  <div id="map"></div>
+  <div class="tablewrap" style="margin-top:12px"><table id="vt"></table></div>
+  <p class="note">Click a <span style="color:#e8765a;font-weight:600">split</span> cell to divide a subnet in two; click a <span style="color:#4a95c7;font-weight:600">join</span> cell to merge everything under it. Notes, colors and the layout are kept in the page URL.</p>
+</section>
+
+<script>
+const COLORS = [null, '#f6c9c0', '#fbe2a8', '#cfe9b8', '#bfe3e0', '#c4d7f2', '#dac8f0', '#f2c6de', '#d9d9d9'];
+const COLORS_DARK = [null, '#5a2f28', '#5a4a1e', '#34502a', '#244a47', '#283f63', '#43305e', '#5a2b45', '#3d3d3d'];
+const MAX_LEAVES = 2048;
+let root = null;
+
+const dark = () => { const t = document.documentElement.dataset.theme; return t ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches; };
+const colorOf = i => i ? (dark() ? COLORS_DARK : COLORS)[i] : null;
+const mk = (net, p, v) => ({ net, p, v, kids: null, note: '', color: 0 });
+function split(n){ const half = blockSize(n.p + 1, n.v); n.kids = [mk(n.net, n.p + 1, n.v), mk(n.net + half, n.p + 1, n.v)]; n.kids[0].note = n.note; n.kids[0].color = n.color; n.note = ''; n.color = 0; }
+function join(n){ const first = leavesOf(n)[0]; n.note = first?.note || ''; n.color = first?.color || 0; n.kids = null; }
+const leavesOf = n => n.kids ? n.kids.flatMap(leavesOf) : [n];
+
+// make (net, p) a leaf of the tree, splitting / joining as needed
+function ensureLeaf(net, p){
+  if (p < root.p || p > bitsOf(root.v) || net < root.net || net > root.net + blockSize(root.p, root.v) - 1n) return null;
+  net &= maskOf(p, root.v);
+  let n = root;
+  while (n.p < p) { if (!n.kids) split(n); n = net >= n.kids[1].net ? n.kids[1] : n.kids[0]; }
+  if (n.kids) n.kids = null;
+  return n;
+}
+
+/* ---------- state <-> URL ---------- */
+function encodeState(){
+  const bits = []; const walk = n => { bits.push(n.kids ? 1 : 0); if (n.kids) n.kids.forEach(walk); }; walk(root);
+  let hex = ''; for (let i = 0; i < bits.length; i += 4) hex += parseInt(bits.slice(i, i + 4).join('').padEnd(4, '0'), 2).toString(16);
+  const n = {}, c = {}; leavesOf(root).forEach((l, i) => { if (l.note) n[i] = l.note; if (l.color) c[i] = l.color; });
+  const json = JSON.stringify({ t: bits.length + '.' + hex, n, c });
+  return btoa(String.fromCharCode(...new TextEncoder().encode(json))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function decodeState(s){
+  const json = new TextDecoder().decode(Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), ch => ch.charCodeAt(0)));
+  const st = JSON.parse(json), [len, hex] = st.t.split('.');
+  const bits = [...hex].flatMap(h => parseInt(h, 16).toString(2).padStart(4, '0').split('').map(Number)).slice(0, +len);
+  let i = 0; const build = n => { if (bits[i++] === 1 && n.p < bitsOf(n.v)) { split(n); n.kids.forEach(build); } }; build(root);
+  leavesOf(root).forEach((l, k) => { l.note = st.n?.[k] || ''; l.color = st.c?.[k] || 0; });
+}
+let saveT;
+function save(){ clearTimeout(saveT); saveT = setTimeout(() => {
+  const u = new URL(location.href); u.searchParams.set('q', cidrStr(root.net, root.p, root.v)); u.searchParams.delete('alloc');
+  if (root.kids || root.note || root.color) u.searchParams.set('s', encodeState()); else u.searchParams.delete('s');
+  history.replaceState(null, '', u);
+}, 250); }
+
+/* ---------- render ---------- */
+function render(){
+  const rows = [], walk = (n, anc) => { if (!n.kids) { rows.push({ n, anc }); return; } n.kids.forEach(k => walk(k, [...anc, n])); };
+  walk(root, []);
+  const maxDepth = Math.max(...rows.map(r => r.n.p - root.p));
+  const v = root.v, span = n => leavesOf(n).length;
+  let html = `<thead><tr><th>Subnet address</th><th>Range of addresses</th><th>Usable IPs</th><th>Hosts</th><th>Note</th><th></th><th class="sjh" colspan="${maxDepth + 1}"><span class="s">Split</span>/<span class="j">Join</span></th></tr></thead><tbody>`;
+  rows.forEach(({ n, anc }, i) => {
+    const last = n.net + blockSize(n.p, v) - 1n, [u0, u1] = usableRange(n.net, n.p, v), bg = colorOf(n.color);
+    const td = bg ? ` style="background:${bg}"` : '';
+    html += `<tr data-i="${i}"><td class="mono"${td}><b>${cidrStr(n.net, n.p, v)}</b></td><td class="mono"${td}>${fmtIP(n.net, v)} – ${fmtIP(last, v)}</td><td class="mono"${td}>${fmtIP(u0, v)} – ${fmtIP(u1, v)}</td><td${td}>${usableHosts(n.p, v).toLocaleString()}</td>
+      <td class="note"${td}><input class="note" data-i="${i}" value="${esc(n.note)}" placeholder="" spellcheck="false"></td><td${td}><button class="sw" data-c="${i}" title="Change color" style="background:${bg || 'var(--panel)'}"></button></td>
+      <td class="sj split${n.p >= bitsOf(v) ? ' max' : ''}" colspan="${maxDepth - (n.p - root.p) + 1}" data-split="${i}" title="${n.p >= bitsOf(v) ? 'Single address' : `Split into two /${n.p + 1}`}"><span>/${n.p}</span></td>`;
+    // ancestors whose first leaf is this row get a join cell spanning their leaves
+    let child = n;
+    for (let j = anc.length - 1; j >= 0 && anc[j].kids[0] === child; j--) { const a = anc[j]; html += `<td class="sj join" rowspan="${span(a)}" data-join="${i}:${j}" title="Join into ${cidrStr(a.net, a.p, v)}"><span>/${a.p}</span></td>`; child = a; }
+    html += '</tr>';
+  });
+  $('#vt').innerHTML = html + '</tbody>';
+  // block map: width proportional to address share
+  $('#map').innerHTML = rows.map(({ n }, i) => { const frac = Math.pow(2, root.p - n.p), bg = colorOf(n.color) || (i % 2 ? 'var(--code-bg)' : 'var(--accent-soft)');
+    return `<div data-m="${i}" style="flex:${frac} 1 0;background:${bg}" title="${esc(cidrStr(n.net, n.p, v) + (n.note ? ' — ' + n.note : ''))}">${frac > 0.07 ? esc(n.note || '/' + n.p) : ''}</div>`; }).join('');
+  window._rows = rows; save();
+}
+
+/* ---------- interactions ---------- */
+$('#vt').addEventListener('click', e => {
+  const s = e.target.closest('[data-split]'), j = e.target.closest('[data-join]'), c = e.target.closest('[data-c]');
+  if (s) { const n = _rows[+s.dataset.split].n; if (n.p >= bitsOf(n.v)) return; if (leavesOf(root).length >= MAX_LEAVES) { msg(`Limit of ${MAX_LEAVES} rows reached — join something first.`); return; } split(n); msg(''); render(); }
+  else if (j) { const [i, k] = j.dataset.join.split(':').map(Number); join(_rows[i].anc[k]); render(); }
+  else if (c) { const n = _rows[+c.dataset.c].n; n.color = (n.color + 1) % COLORS.length; render(); }
+});
+$('#vt').addEventListener('input', e => { const t = e.target.closest('input.note'); if (!t) return; _rows[+t.dataset.i].n.note = t.value;
+  const m = $(`#map [data-m="${t.dataset.i}"]`); if (m && m.textContent) m.textContent = t.value || '/' + _rows[+t.dataset.i].n.p; save(); });
+$('#map').addEventListener('click', e => { const d = e.target.closest('[data-m]'); if (!d) return; const tr = $(`#vt tr[data-i="${d.dataset.m}"]`);
+  $$('#vt tr.hl').forEach(x => x.classList.remove('hl')); tr.classList.add('hl'); tr.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); tr.querySelector('input.note').focus(); });
+const msg = (t, cls = 'err') => $('#msg').innerHTML = t ? `<div class="${cls}">${t}</div>` : '';
+
+function start(fromInputs = true){
+  let a = $('#addr').value.trim(), p = $('#size').value.trim();
+  if (a.includes('/')) { [a, p] = a.split('/'); $('#addr').value = a; $('#size').value = p; }
+  const c = parseCIDR(`${a}/${p}`);
+  if (!c) { msg('Enter a valid IPv4 or IPv6 network and prefix size.'); return false; }
+  if (c.v === 4 && c.p < 8 || c.v === 6 && c.p < 16) msg(`A /${c.p} is very large — rows are capped at ${MAX_LEAVES}.`, 'note'); else msg('');
+  if (c.net !== c.n) { $('#addr').value = fmtIP(c.net, c.v); msg(`Adjusted to the network address ${cidrStr(c.net, c.p, c.v)}.`, 'note'); }
+  root = mk(c.net, c.p, c.v);
+  return true;
+}
+$('#go').onclick = () => { if (start()) render(); };
+['#addr', '#size'].forEach(s => $(s).addEventListener('keydown', e => e.key === 'Enter' && $('#go').click()));
+$('#reset').onclick = () => { root.kids = null; root.note = ''; root.color = 0; render(); };
+$('#share').onclick = e => { clearTimeout(saveT); save(); setTimeout(() => copyText(location.href, e.target), 300); };
+const table = () => leavesOf(root).map(n => { const [u0, u1] = usableRange(n.net, n.p, n.v); return [cidrStr(n.net, n.p, n.v), `${fmtIP(n.net, n.v)} - ${fmtIP(n.net + blockSize(n.p, n.v) - 1n, n.v)}`, `${fmtIP(u0, n.v)} - ${fmtIP(u1, n.v)}`, usableHosts(n.p, n.v).toString(), n.note]; });
+$('#csv').onclick = () => download(`subnets-${cidrStr(root.net, root.p, root.v).replace(/[\/:]/g, '_')}.csv`, toCSV([['subnet', 'range', 'usable', 'hosts', 'note'], ...table()]), 'text/csv');
+$('#txt').onclick = e => { const rows = [['Subnet', 'Range', 'Usable IPs', 'Hosts', 'Note'], ...table()]; const w = rows[0].map((_, i) => Math.max(...rows.map(r => r[i].length)));
+  copyText(rows.map(r => r.map((x, i) => x.padEnd(w[i])).join('  ').trimEnd()).join('\n'), e.target); };
+$('#allocBtn').onclick = () => { $('#allocBox').hidden = !$('#allocBox').hidden; if (!$('#allocBox').hidden) $('#alloc').focus(); };
+
+function allocate(lines){
+  const exact = [], reqs = [], bad = [];
+  for (const raw of lines) {
+    const line = raw.trim(); if (!line) continue;
+    const m = line.match(/^(.*?)[\s,;:]+(\S+\/\d{1,3})$/), h = line.match(/^(.*?)[\s,;:]+(\d+)$/);
+    if (m && parseCIDR(m[2])) exact.push({ name: m[1].trim(), c: parseCIDR(m[2]) });
+    else if (h) reqs.push({ name: h[1].trim() || 'subnet', hosts: +h[2] });
+    else bad.push(line);
+  }
+  root.kids = null; root.note = ''; root.color = 0;
+  const problems = [], placed = [];
+  let color = 1;
+  for (const x of exact) { const n = x.c.v === root.v ? ensureLeaf(x.c.net, x.c.p) : null; if (n) { n.note = x.name; n.color = color++ % COLORS.length || 1; placed.push({ v: root.v, s: n.net, e: n.net + blockSize(n.p, n.v) - 1n }); } else problems.push(`${esc(x.name)} (${esc(cidrStr(x.c.net, x.c.p, x.c.v))}) is outside ${esc(cidrStr(root.net, root.p, root.v))}`); }
+  // host-count requests go into the space left after exact placements, largest first
+  const reqsSorted = reqs.map((r, i) => ({ ...r, i, p: prefixForHosts(r.hosts, root.v) })).sort((a, b) => a.p - b.p || a.i - b.i);
+  for (const r of reqsSorted) {
+    const free = subtractRanges([{ v: root.v, s: root.net, e: root.net + blockSize(root.p, root.v) - 1n }], placed).flatMap(f => rangeToBlocks(f.s, f.e, root.v));
+    const slot = r.p == null ? null : free.filter(b => b.p <= r.p).sort((a, b) => b.p - a.p || cmpBig(a.net, b.net))[0];
+    if (!slot) { problems.push(`${esc(r.name)} (${r.hosts.toLocaleString()} hosts) doesn't fit`); continue; }
+    const n = ensureLeaf(slot.net, r.p); n.note = r.name; n.color = color++ % COLORS.length || 1;
+    placed.push({ v: root.v, s: n.net, e: n.net + blockSize(n.p, n.v) - 1n });
+  }
+  if (bad.length) problems.push(`Couldn't read: ${esc(bad.slice(0, 5).join(' · '))}`);
+  msg(problems.join('<br>'));
+  render();
+}
+$('#allocGo').onclick = () => allocate($('#alloc').value.split('\n'));
+
+/* ---------- boot: ?q=10.0.0.0/16 [&s=state | &alloc=Name=cidr|Name=cidr] ---------- */
+(function(){
+  const q = getParam('q'); if (q) { const [a, p] = q.split('/'); $('#addr').value = a; $('#size').value = p || ''; }
+  if (!start()) { $('#addr').value = '10.0.0.0'; $('#size').value = 16; start(); }
+  try { if (getParam('s')) decodeState(getParam('s')); } catch { msg('The layout in this link could not be read — showing the bare network.'); }
+  if (getParam('alloc')) { allocate(getParam('alloc').split('|').map(x => x.replace('=', ' '))); return; }
+  render();
+})();
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', render);
+$('#themeBtn')?.addEventListener('click', () => setTimeout(render, 0));
+</script>

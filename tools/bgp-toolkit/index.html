@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BGP Toolkit · NetOps Toolkit</title>
+<meta name="description" content="Live BGP data from RIPE RIS — ASN and prefix lookups, upstreams, visibility, RPKI origin validation, looking glass AS paths and path / neighbour graphs — plus prefix-list generator, community decoder, AS-path regex tester and ASN converter.">
+<link rel="stylesheet" href="../../assets/style.css">
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="../../">← All tools</a>
+  <header class="top">
+    <div><h1>BGP Toolkit</h1><p class="sub">Live BGP data from RIPE RIS — ASN and prefix lookups, upstreams, visibility, RPKI origin validation, looking glass AS paths and path / neighbour graphs — plus prefix-list generator, community decoder, AS-path regex tester and ASN converter.</p></div>
+    <button id="themeBtn" title="Toggle theme"></button>
+  </header>
+<script src="../../assets/common.js"></script>
+<script src="../../assets/netcalc.js"></script>
+<style>
+.path{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+.asn{border:1px solid var(--border);border-radius:5px;padding:1px 6px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;background:var(--code-bg);cursor:pointer;white-space:nowrap}
+.asn.origin{border-color:var(--accent);color:var(--accent)} .asn.bogon{border-color:var(--bad);color:var(--bad)}
+.asn sup{color:var(--muted);font-size:10px;margin-left:2px}
+.path .arr{color:var(--muted);font-size:11px}
+.stat{display:inline-block;margin-right:22px;vertical-align:top} .stat b{font-size:18px;display:block}
+#vsvg g.n{cursor:pointer} #vsvg .e{transition:stroke-opacity .12s}
+#vsvg.hl .e{stroke-opacity:.06} #vsvg.hl .e.on{stroke-opacity:.95;stroke:var(--accent)}
+#vsvg.hl g.n{opacity:.28} #vsvg.hl g.n.on{opacity:1}
+.lgd{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);margin-right:10px} .lgd i{display:inline-block;width:12px;height:12px;border-radius:3px;border:1px solid}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:16px} @media (max-width:760px){.cols{grid-template-columns:1fr}}
+</style>
+<div class="tabs" id="tabs" style="margin-top:0"></div>
+
+<div class="pane" id="pane-look">
+  <div class="row" style="margin-top:0">
+    <input type="text" id="lq" class="grow mono" placeholder="AS13335 · 1.1.1.0/24 · 8.8.8.8 · 2606:4700::/32" autocomplete="off" spellcheck="false">
+    <button class="primary" id="lGo">Look up</button>
+  </div>
+  <p class="note">Live data from the RIPEstat API (RIPE NCC RIS route collectors), queried from your browser.</p>
+  <div id="lOut"></div>
+</div>
+
+<div class="pane" id="pane-lg" hidden>
+  <div class="row" style="margin-top:0">
+    <input type="text" id="gq" class="grow mono" placeholder="Prefix or IP, e.g. 1.1.1.0/24" autocomplete="off" spellcheck="false">
+    <button class="primary" id="gGo">Show AS paths</button>
+  </div>
+  <p class="note">Current best paths for the prefix as seen by ~20 RIPE RIS collectors and their peers worldwide.</p>
+  <div id="gOut"></div>
+</div>
+
+<div class="pane" id="pane-viz" hidden>
+  <div class="row" style="margin-top:0">
+    <input type="text" id="vq" class="grow mono" placeholder="Prefix / IP for an AS-path graph, or an ASN for its neighbour graph — e.g. 8.8.8.0/24 or AS13335" autocomplete="off" spellcheck="false">
+    <button class="primary" id="vGo">Visualize</button>
+  </div>
+  <div class="row" id="vPathOpts" hidden>
+    <label class="small" style="margin:0">Paths</label><select id="vMax"><option value="20">Top 20</option><option value="40" selected>Top 40</option><option value="80">Top 80</option><option value="150">Top 150</option><option value="0">All</option></select>
+    <label class="small" style="margin:0">Collector</label><select id="vRrc"></select>
+  </div>
+  <p class="note">Prefix: routes seen by RIPE RIS peers, flowing from the peers (left) through transit networks to the origin (right) — line width is the number of routes; hover an AS to trace its paths. ASN: its busiest upstreams (left) and downstreams (right) — click any AS to explore from there.</p>
+  <div id="vOut"></div><div id="vInfo"></div>
+</div>
+
+<div class="pane" id="pane-rpki" hidden>
+  <div class="row" style="margin-top:0">
+    <input type="text" id="rAsn" class="mono" placeholder="Origin AS, e.g. AS13335" style="width:200px" spellcheck="false">
+    <input type="text" id="rPfx" class="grow mono" placeholder="Prefix, e.g. 1.1.1.0/24" spellcheck="false">
+    <button class="primary" id="rGo">Validate</button>
+  </div>
+  <p class="note">RPKI route origin validation (RFC 6811) against the published ROAs, via RIPEstat's validator.</p>
+  <div id="rOut"></div>
+</div>
+
+<div class="pane" id="pane-pl" hidden>
+  <div class="row" style="margin-top:0">
+    <input type="text" id="pAs" class="mono" placeholder="AS64500" style="width:160px" spellcheck="false"><button id="pFetch">Fetch announced prefixes</button>
+    <span class="muted" id="pInfo"></span>
+  </div>
+  <textarea id="pIn" spellcheck="false" style="min-height:130px;margin-top:8px" placeholder="Prefixes, one per line (or fetch them from an ASN above)&#10;192.0.2.0/24&#10;198.51.100.0/24&#10;2001:db8::/32"></textarea>
+  <div class="row">
+    <label class="small" style="margin:0">Name</label><input type="text" id="pName" class="mono" value="AS64500-IN" style="width:150px">
+    <label class="small" style="margin:0">Format</label>
+    <select id="pFmt"><option value="ios">Cisco IOS / NX-OS / Arista / FRR</option><option value="xr">Cisco IOS-XR</option><option value="junos">Juniper Junos</option><option value="mikrotik">MikroTik RouterOS 7</option><option value="bird">BIRD 2</option><option value="huawei">Huawei VRP</option><option value="plain">Plain list</option></select>
+    <label class="small" style="margin:0">IPv4 up to</label><select id="pLe4"><option value="0">exact</option><option>24</option><option>23</option><option>22</option><option>20</option></select>
+    <label class="small" style="margin:0">IPv6 up to</label><select id="pLe6"><option value="0">exact</option><option>48</option><option>44</option><option>40</option></select>
+    <label class="chk"><input type="checkbox" id="pAgg" checked> Aggregate</label>
+    <label class="chk"><input type="checkbox" id="pBogon" checked> Drop bogons / too-specifics</label>
+  </div>
+  <div class="row"><button class="primary" id="pGo">Generate</button><button id="pCp">Copy</button><button id="pDl">Download</button><span class="muted" id="pStat"></span></div>
+  <pre id="pOut" style="margin-top:8px;max-height:480px"></pre>
+  <p class="note">Same idea as <span class="mono">bgpq4 -A</span>, but from the prefixes currently visible in BGP rather than IRR route objects — for customer filters, also check their IRR <span class="mono">as-set</span>.</p>
+</div>
+
+<div class="pane" id="pane-com" hidden>
+  <div class="row" style="margin-top:0"><label class="small" style="margin:0">Route-server / IXP ASN (optional)</label><input type="text" id="cRs" class="mono" placeholder="e.g. 6777" style="width:140px"></div>
+  <textarea id="cIn" spellcheck="false" style="min-height:110px;margin-top:8px" placeholder="65535:666 13335:10000 0:6939 65535:65281&#10;64500:1:200 rt:65000:100&#10;4294901761">65535:65281 65535:666 0:6939 6777:6939 13335:10000 64500:1:200 rt:65000:100</textarea>
+  <div class="row"><button class="primary" id="cGo">Decode</button></div>
+  <div id="cOut"></div>
+</div>
+
+<div class="pane" id="pane-path" hidden>
+  <div class="row" style="margin-top:0">
+    <input type="text" id="aRe" class="grow mono" placeholder="Cisco-style AS-path regex, e.g. _13335$" value="_13335$" spellcheck="false">
+    <button class="primary" id="aGo">Test</button>
+  </div>
+  <div class="row chips" id="aEx"></div>
+  <textarea id="aIn" spellcheck="false" style="min-height:140px;margin-top:8px" placeholder="AS paths, one per line">6939 13335
+3356 1299 13335
+174 13335 13335 13335
+64512 3356 13335
+2914 3257 2914 13335
+6939</textarea>
+  <div id="aOut"></div>
+</div>
+
+<div class="pane" id="pane-asn" hidden>
+  <textarea id="nIn" spellcheck="false" style="min-height:100px" placeholder="ASNs in any format: AS13335, 4200000001, 64086.59904, 1.10">13335
+AS4200000001
+64086.59904
+23456
+64512
+0</textarea>
+  <div class="row"><button class="primary" id="nGo">Convert &amp; classify</button><label class="chk"><input type="checkbox" id="nNames" checked> Look up holder names</label></div>
+  <div id="nOut"></div>
+</div>
+
+<script>
+/* ---------- shared ---------- */
+const TABS = [['look', 'Lookup'], ['lg', 'Looking glass'], ['viz', 'Visualize'], ['rpki', 'RPKI'], ['pl', 'Prefix lists'], ['com', 'Communities'], ['path', 'AS-path'], ['asn', 'ASN tools']];
+$('#tabs').innerHTML = TABS.map(([k, n]) => `<button class="tab" data-t="${k}">${n}</button>`).join('');
+function tab(t){ TABS.forEach(([k]) => $('#pane-' + k).hidden = k !== t); $$('#tabs .tab').forEach(b => b.classList.toggle('on', b.dataset.t === t)); setParam('tab', t === 'look' ? '' : t); }
+$('#tabs').onclick = e => { const b = e.target.closest('.tab'); if (b) tab(b.dataset.t); };
+const spin = t => `<p><span class="spin"></span> ${t}</p>`;
+const errBox = e => `<div class="err">${esc(e.message || e)}${/fetch|network/i.test(e.message || '') ? ' — RIPEstat may be unreachable from this network or blocked by an extension.' : ''}</div>`;
+const badge = (c, t, title = '') => `<span class="b b-${c}"${title ? ` title="${esc(title)}"` : ''}>${esc(t)}</span>`;
+
+const rsCache = new Map();
+async function ripe(ep, params){
+  const u = new URL(`https://stat.ripe.net/data/${ep}/data.json`);
+  for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
+  u.searchParams.set('sourceapp', 'netops-toolkit');
+  if (!rsCache.has(u.href)) rsCache.set(u.href, (async () => {
+    const r = await fetch(u); if (!r.ok) throw new Error(`RIPEstat ${ep} returned HTTP ${r.status}`);
+    const j = await r.json(); if (j.status !== 'ok') throw new Error(`RIPEstat ${ep}: ${(j.messages || []).map(m => m[1]).join(' ') || j.status}`);
+    return j.data;
+  })());
+  try { return await rsCache.get(u.href); } catch (e) { rsCache.delete(u.href); throw e; }
+}
+async function pool(items, n, fn){ let i = 0; await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => { while (i < items.length) { const k = i++; try { await fn(items[k], k); } catch {} } })); }
+
+/* ---------- ASNs ---------- */
+function parseASN(s){
+  s = String(s).trim().replace(/^AS/i, ''); let m;
+  if ((m = s.match(/^(\d+)\.(\d+)$/))) { const hi = +m[1], lo = +m[2]; return hi <= 65535 && lo <= 65535 ? hi * 65536 + lo : null; }
+  if (/^\d+$/.test(s)) { const n = +s; return n <= 4294967295 ? n : null; }
+  return null;
+}
+const asdot = n => n > 65535 ? `${Math.floor(n / 65536)}.${n % 65536}` : String(n);
+function asnKind(n){
+  if (n === 0) return ['bad', 'Reserved — AS0 (RFC 7607, “not routable” in RPKI)'];
+  if (n === 23456) return ['warn', 'AS_TRANS (RFC 6793) — stand-in for a 4-byte ASN'];
+  if ((n >= 64496 && n <= 64511) || (n >= 65536 && n <= 65551)) return ['info', 'Documentation (RFC 5398)'];
+  if (n >= 64512 && n <= 65534) return ['warn', 'Private use, 16-bit (RFC 6996)'];
+  if (n >= 4200000000 && n <= 4294967294) return ['warn', 'Private use, 32-bit (RFC 6996)'];
+  if (n === 65535 || n === 4294967295) return ['bad', 'Reserved (RFC 7300)'];
+  if (n >= 65552 && n <= 131071) return ['bad', 'Reserved by IANA'];
+  return ['ok', n > 65535 ? 'Public 32-bit ASN' : 'Public 16-bit ASN'];
+}
+const bogonASN = n => asnKind(n)[0] !== 'ok';
+const NAMES = new Map();
+async function asName(n){ if (!NAMES.has(n)) NAMES.set(n, ripe('as-overview', { resource: 'AS' + n }).then(d => d.holder || '', () => '')); return NAMES.get(n); }
+async function fillNames(root){ // fills <x data-name="ASN"> elements with holder names
+  const els = $$('[data-name]', root), uniq = [...new Set(els.map(e => +e.dataset.name))].slice(0, 60);
+  await pool(uniq, 6, async n => { const h = await asName(n); els.filter(e => +e.dataset.name === n).forEach(e => { if (e.tagName === 'SPAN' && e.classList.contains('asn')) e.title = h; else e.textContent = h; }); });
+}
+const asLink = n => `<a href="#" data-as="${n}" class="mono">AS${n}</a>`;
+const extLinks = n => `<a href="https://bgp.tools/as/${n}" target="_blank" rel="noopener">bgp.tools</a> · <a href="https://bgp.he.net/AS${n}" target="_blank" rel="noopener">bgp.he.net</a> · <a href="https://www.peeringdb.com/asn/${n}" target="_blank" rel="noopener">PeeringDB</a> · <a href="https://stat.ripe.net/AS${n}" target="_blank" rel="noopener">RIPEstat</a>`;
+function wireAsLinks(root){ $$('[data-as]', root).forEach(a => a.onclick = e => { e.preventDefault(); $('#lq').value = 'AS' + a.dataset.as; tab('look'); lookup(); scrollTo(0, 0); }); }
+
+const RPKI = { valid: ['ok', 'RPKI valid'], invalid_asn: ['bad', 'RPKI invalid — wrong origin AS'], invalid_length: ['bad', 'RPKI invalid — more specific than maxLength'], invalid: ['bad', 'RPKI invalid'], unknown: ['mute', 'RPKI not found (no ROA)'], 'not-found': ['mute', 'RPKI not found (no ROA)'] };
+const rpkiBadge = s => { const [c, t] = RPKI[s] || ['mute', 'RPKI ' + s]; return badge(c, t); };
+
+/* ---------- lookup ---------- */
+async function lookup(){
+  const q = $('#lq').value.trim(); if (!q) return;
+  setParam('q', q);
+  const asn = /^(as)?\d+(\.\d+)?$/i.test(q) && !parseCIDR(q) ? parseASN(q) : null;
+  if (asn != null) return lookupASN(asn);
+  const c = parseCIDR(q);
+  if (c) return lookupPrefix(c.p === bitsOf(c.v) ? fmtIP(c.n, c.v) : cidrStr(c.net, c.p, c.v));
+  $('#lOut').innerHTML = '<div class="err">Enter an ASN (AS13335), a prefix (1.1.1.0/24) or an IP address.</div>';
+}
+
+let asPrefixes = [];
+async function lookupASN(n){
+  $('#lOut').innerHTML = spin(`Querying AS${n}…`);
+  const [ov, ap, nb] = await Promise.allSettled([ripe('as-overview', { resource: 'AS' + n }), ripe('announced-prefixes', { resource: 'AS' + n }), ripe('asn-neighbours', { resource: 'AS' + n })]);
+  if (ov.status === 'rejected') { $('#lOut').innerHTML = errBox(ov.reason); return; }
+  const o = ov.value, kind = asnKind(n);
+  asPrefixes = ap.status === 'fulfilled' ? ap.value.prefixes.map(p => parseCIDR(p.prefix)).filter(Boolean) : [];
+  const v4 = asPrefixes.filter(p => p.v === 4), v6 = asPrefixes.filter(p => p.v === 6);
+  const agg4 = mergeRanges(v4.map(p => ({ v: 4, s: p.net, e: p.last }))), slash24 = agg4.reduce((a, r) => a + Number((r.e - r.s + 1n) / 256n), 0);
+  const neigh = nb.status === 'fulfilled' ? nb.value.neighbours : [];
+  const up = neigh.filter(x => x.type === 'left').sort((a, b) => b.power - a.power), down = neigh.filter(x => x.type === 'right').sort((a, b) => b.power - a.power);
+  const nbTable = (list, label) => `<div><h3>${label} <span class="muted" style="font-weight:400">${list.length}</span></h3>${list.length ? `<div class="tablewrap" style="max-height:340px;overflow:auto"><table><thead><tr><th>ASN</th><th>Name</th><th title="Number of RIS peers seeing this adjacency">Seen by</th></tr></thead><tbody>
+    ${list.slice(0, 300).map(x => `<tr><td>${asLink(x.asn)}</td><td class="muted" style="font-size:12px" data-name="${x.asn}"></td><td>${x.power}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">None seen.</p>'}</div>`;
+  $('#lOut').innerHTML = `<section class="card" style="margin-top:12px">
+      <div class="t"><span style="font-size:17px">AS${n} <span class="muted" style="font-weight:400">${esc(o.holder || 'unknown holder')}</span></span><span>${o.announced ? badge('ok', 'announced') : badge('mute', 'not announced')} ${badge(kind[0], kind[1])}</span></div>
+      <div style="margin:8px 0 10px"><span class="stat"><b>${v4.length.toLocaleString()}</b><span class="muted">IPv4 prefixes</span></span><span class="stat"><b>${slash24.toLocaleString()}</b><span class="muted">/24s of IPv4 space</span></span><span class="stat"><b>${v6.length.toLocaleString()}</b><span class="muted">IPv6 prefixes</span></span>
+        <span class="stat"><b>${up.length}</b><span class="muted">upstreams / peers</span></span><span class="stat"><b>${down.length}</b><span class="muted">downstreams</span></span></div>
+      <div class="kv"><div>asdot</div><div>${asdot(n)}</div><div>Registry block</div><div>${esc(o.block?.desc || '—')} <span class="muted">(${esc(o.block?.resource || '')})</span></div><div>More</div><div style="font-family:inherit">${extLinks(n)}</div></div><div class="row"><button id="toViz">Neighbour graph →</button></div></section>
+    ${ap.status === 'rejected' ? errBox(ap.reason) : `<section style="margin-top:16px"><h2>Announced prefixes</h2>
+      <div class="row" style="margin-top:0"><input type="search" id="apf" class="grow mono" placeholder="Filter prefixes…"><label class="chk"><input type="checkbox" id="apAgg"> Aggregated</label>
+        <button id="apRpki">Check RPKI (first 100 shown)</button><button id="apCp">Copy</button><button id="apPl">Build prefix list →</button></div>
+      <div class="tablewrap" style="margin-top:8px;max-height:420px;overflow:auto"><table><thead><tr><th>Prefix</th><th>RPKI</th><th></th></tr></thead><tbody id="apBody"></tbody></table></div><p class="note" id="apNote"></p></section>`}
+    ${nb.status === 'rejected' ? errBox(nb.reason) : `<section style="margin-top:16px"><h2>Neighbours</h2><div class="cols">${nbTable(up, 'Upstreams / peers <span class="muted" style="font-weight:400">(left of AS' + n + ' in paths)</span>')}${nbTable(down, 'Downstreams <span class="muted" style="font-weight:400">(right of AS' + n + ')</span>')}</div></section>`}`;
+  wireAsLinks($('#lOut'));
+  $('#toViz').onclick = () => { $('#vq').value = 'AS' + n; tab('viz'); visualize(); };
+  if (ap.status === 'fulfilled') {
+    const rpki = new Map(); let shown = [];
+    const draw = () => {
+      const f = $('#apf').value.trim().toLowerCase();
+      const list = $('#apAgg').checked ? aggregateRanges(asPrefixes.map(p => ({ v: p.v, s: p.net, e: p.last }))) : asPrefixes.map(p => cidrStr(p.net, p.p, p.v));
+      shown = list.filter(p => !f || p.includes(f));
+      $('#apBody').innerHTML = shown.slice(0, 2000).map(p => `<tr><td class="mono">${esc(p)}</td><td data-rp="${esc(p)}">${rpki.has(p) ? rpkiBadge(rpki.get(p)) : '<span class="muted">—</span>'}</td><td><a href="#" data-pf="${esc(p)}">details</a></td></tr>`).join('') || '<tr><td colspan="3" class="muted">No prefixes.</td></tr>';
+      $('#apNote').textContent = shown.length > 2000 ? `Showing 2,000 of ${shown.length.toLocaleString()} — filter to narrow down.` : '';
+      $$('[data-pf]').forEach(a => a.onclick = e => { e.preventDefault(); $('#lq').value = a.dataset.pf; lookup(); scrollTo(0, 0); });
+    };
+    $('#apf').oninput = draw; $('#apAgg').onchange = draw; draw();
+    $('#apCp').onclick = e => copyText(shown.join('\n'), e.target);
+    $('#apPl').onclick = () => { $('#pAs').value = 'AS' + n; $('#pName').value = `AS${n}-IN`; $('#pIn').value = asPrefixes.map(p => cidrStr(p.net, p.p, p.v)).join('\n'); tab('pl'); genPL(); scrollTo(0, 0); };
+    $('#apRpki').onclick = async e => { const b = e.target; b.disabled = true; let done = 0; const todo = shown.slice(0, 100).filter(p => !rpki.has(p));
+      await pool(todo, 6, async p => { const d = await ripe('rpki-validation', { resource: 'AS' + n, prefix: p }); rpki.set(p, d.status); const cell = $(`[data-rp="${CSS.escape(p)}"]`); if (cell) cell.innerHTML = rpkiBadge(d.status); b.textContent = `Checking ${++done}/${todo.length}…`; });
+      b.textContent = 'RPKI checked ✓'; };
+  }
+  fillNames($('#lOut'));
+}
+
+async function lookupPrefix(res){
+  $('#lOut').innerHTML = spin(`Querying ${esc(res)}…`);
+  let po; try { po = await ripe('prefix-overview', { resource: res }); } catch (e) { $('#lOut').innerHTML = errBox(e); return; }
+  const pfx = po.resource;
+  if (!po.announced && !po.asns?.length) { $('#lOut').innerHTML = `<section class="card" style="margin-top:12px"><div class="t"><span class="mono">${esc(pfx)}</span>${badge('mute', 'not announced')}</div><p class="muted" style="margin:0">No route covering this address is visible in BGP right now. Registry block: ${esc(po.block?.desc || '—')}.</p></section>`; return; }
+  const [rs, ...rp] = await Promise.allSettled([ripe('routing-status', { resource: pfx }), ...po.asns.map(a => ripe('rpki-validation', { resource: 'AS' + a.asn, prefix: pfx }))]);
+  const st = rs.status === 'fulfilled' ? rs.value : null;
+  const vis = st ? (pfx.includes(':') ? st.visibility.v6 : st.visibility.v4) : null;
+  const pct = vis && vis.total_ris_peers ? Math.round(vis.ris_peers_seeing / vis.total_ris_peers * 100) : null;
+  const irr = new Map((st?.origins || []).map(o => [o.origin, o.route_objects]));
+  const list = (arr, k) => arr?.length ? `<div class="tablewrap" style="max-height:260px;overflow:auto"><table><tbody>${arr.slice(0, 200).map(x => `<tr><td class="mono"><a href="#" data-pf="${esc(x.prefix)}">${esc(x.prefix)}</a></td><td>${asLink(x.origin)}</td><td class="muted" style="font-size:12px" data-name="${x.origin}"></td></tr>`).join('')}</tbody></table></div>` : `<p class="muted">None.</p>`;
+  $('#lOut').innerHTML = `<section class="card" style="margin-top:12px">
+      <div class="t"><span style="font-size:17px" class="mono">${esc(pfx)}</span><span>${po.announced ? badge('ok', 'announced') : badge('mute', 'not announced')} ${po.asns.length > 1 ? badge('warn', 'multiple origins (MOAS)') : ''}</span></div>
+      ${res !== pfx ? `<p class="muted" style="margin:0 0 8px">Most specific route covering <span class="mono">${esc(res)}</span>.</p>` : ''}
+      <div class="tablewrap"><table><thead><tr><th>Origin</th><th>Holder</th><th>RPKI</th><th>IRR route objects</th></tr></thead><tbody>
+        ${po.asns.map((a, i) => `<tr><td>${asLink(a.asn)}</td><td>${esc(a.holder || '')}</td><td>${rp[i].status === 'fulfilled' ? rpkiBadge(rp[i].value.status) + (rp[i].value.validating_roas?.length ? `<div class="muted" style="font-size:11.5px;margin-top:3px">${rp[i].value.validating_roas.map(r => `ROA ${esc(r.prefix)} max /${r.max_length} AS${esc(r.origin)}`).join('<br>')}</div>` : '') : '<span class="muted">error</span>'}</td><td>${(irr.get(a.asn) || []).map(s => badge('info', s)).join(' ') || '<span class="muted">none</span>'}</td></tr>`).join('')}</tbody></table></div>
+      <div class="kv" style="margin-top:12px">
+        <div>Visibility</div><div>${vis ? `${vis.ris_peers_seeing} of ${vis.total_ris_peers} RIS peers (${pct}%) ${pct < 50 ? badge('warn', 'low') : ''}` : '—'}</div>
+        <div>First seen</div><div>${st?.first_seen ? `${esc(st.first_seen.time.slice(0, 10))} · origin AS${esc(st.first_seen.origin)}` : '—'}</div>
+        <div>Registry block</div><div>${esc(po.block?.desc || '—')} <span class="muted">(${esc(po.block?.resource || '')})</span></div>
+      </div>
+      <div class="row"><button id="toLg">Looking glass →</button><button id="toVizP">Visualize paths →</button><a class="btn" href="../domain-intel/?q=${encodeURIComponent(pfx.split('/')[0])}">RDAP / WHOIS →</a><a class="btn" href="../subnet-calc/?q=${encodeURIComponent(pfx)}">Subnet math →</a></div></section>
+    <div class="cols" style="margin-top:16px"><div><h2>Less specifics <span class="muted" style="font-weight:400">(covering routes)</span></h2>${list(st?.less_specifics)}</div><div><h2>More specifics</h2>${list(st?.more_specifics)}</div></div>`;
+  wireAsLinks($('#lOut'));
+  $$('[data-pf]').forEach(a => a.onclick = e => { e.preventDefault(); $('#lq').value = a.dataset.pf; lookup(); scrollTo(0, 0); });
+  $('#toLg').onclick = () => { $('#gq').value = pfx; tab('lg'); lookingGlass(); };
+  $('#toVizP').onclick = () => { $('#vq').value = pfx; tab('viz'); visualize(); };
+  fillNames($('#lOut'));
+}
+
+/* ---------- looking glass ---------- */
+function pathHtml(path, origin){
+  const out = []; let i = 0;
+  while (i < path.length) { let j = i; while (j + 1 < path.length && path[j + 1] === path[i]) j++; out.push({ a: path[i], n: j - i + 1 }); i = j + 1; }
+  return `<div class="path">${out.map((x, k) => `${k ? '<span class="arr">›</span>' : ''}<span class="asn${x.a === origin ? ' origin' : ''}${bogonASN(x.a) ? ' bogon' : ''}" data-as="${x.a}" data-name="${x.a}">${x.a}${x.n > 1 ? `<sup>×${x.n}</sup>` : ''}</span>`).join('')}</div>`;
+}
+let lgPaths = [], lgComms = [];
+async function lookingGlass(){
+  const q = $('#gq').value.trim(), c = parseCIDR(q);
+  if (!c) { $('#gOut').innerHTML = '<div class="err">Enter a prefix or IP address.</div>'; return; }
+  const res = c.p === bitsOf(c.v) ? fmtIP(c.n, c.v) : cidrStr(c.net, c.p, c.v);
+  $('#gOut').innerHTML = spin('Collecting routes from RIS collectors…');
+  let d, rows; try { ({ d, rows } = await lgFetch(res)); } catch (e) { $('#gOut').innerHTML = errBox(e); return; }
+  if (!rows.length) { $('#gOut').innerHTML = '<p class="muted">No collector currently has a route for this resource.</p>'; return; }
+  const byPath = new Map();
+  for (const r of rows) { const k = r.path.join(' '); if (!byPath.has(k)) byPath.set(k, { path: r.path, rows: [] }); byPath.get(k).rows.push(r); }
+  const paths = [...byPath.values()].sort((a, b) => b.rows.length - a.rows.length);
+  const origins = [...new Set(rows.map(r => r.path.at(-1)))];
+  const ups = new Map(); rows.forEach(r => { const u = r.path.filter((a, i, p) => !i || a !== p[i - 1]).at(-2); if (u != null) ups.set(u, (ups.get(u) || 0) + 1); });
+  const lens = rows.map(r => new Set(r.path).size), avg = lens.reduce((a, b) => a + b, 0) / lens.length;
+  const comms = new Map(); rows.forEach(r => [r.community, r.largeCommunity, r.extendedCommunity].join(' ').split(/\s+/).filter(Boolean).forEach(x => comms.set(x, (comms.get(x) || 0) + 1)));
+  lgPaths = paths.map(p => p.path.join(' ')); lgComms = [...comms.keys()];
+  const pfxs = [...new Set(rows.map(r => r.prefix))];
+  $('#gOut').innerHTML = `<div style="margin:12px 0"><span class="stat"><b>${rows.length}</b><span class="muted">routes (RIS peers)</span></span><span class="stat"><b>${paths.length}</b><span class="muted">unique AS paths</span></span>
+      <span class="stat"><b>${avg.toFixed(1)}</b><span class="muted">avg path length</span></span><span class="stat"><b>${ups.size}</b><span class="muted">upstreams of origin</span></span><span class="stat"><b>${d.rrcs.length}</b><span class="muted">collectors</span></span></div>
+    <div class="kv"><div>Prefix</div><div>${pfxs.map(esc).join(', ')}</div><div>Origin</div><div>${origins.map(o => `${asLink(o)} <span class="muted" data-name="${o}"></span>`).join(' · ')} ${origins.length > 1 ? badge('warn', 'multiple origins') : ''}</div>
+      <div>Upstreams of origin</div><div style="font-family:inherit">${[...ups.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20).map(([a, n]) => `${asLink(a)} <span class="muted">${n} route${n > 1 ? 's' : ''}</span>`).join(' · ')}${ups.size > 20 ? ` <span class="muted">· and ${ups.size - 20} more</span>` : ''}</div></div>
+    <div class="row"><button id="lgToViz">Visualize →</button><button id="lgToPath">Test these paths with a regex →</button><button id="lgToCom">Decode communities →</button><button id="lgCsv">CSV</button></div>
+    <h2 style="margin-top:14px">AS paths</h2><div class="tablewrap"><table><thead><tr><th>Seen by</th><th>Path (collector side → origin)</th><th>Len</th></tr></thead><tbody>
+      ${paths.slice(0, 300).map(p => `<tr><td style="white-space:nowrap">${p.rows.length} peer${p.rows.length > 1 ? 's' : ''}<div class="muted" style="font-size:11px">${esc([...new Set(p.rows.map(r => r.rrc))].join(' '))}</div></td><td>${pathHtml(p.path, p.path.at(-1))}</td><td>${p.path.length}${new Set(p.path).size < p.path.length ? ` <span class="muted">(${new Set(p.path).size} unique)</span>` : ''}</td></tr>`).join('')}</tbody></table></div>
+    ${comms.size ? `<h2 style="margin-top:14px">Communities seen</h2><div class="chips">${[...comms.entries()].sort((a, b) => b[1] - a[1]).slice(0, 80).map(([c, n]) => `<span class="chip" title="${n} route(s)">${esc(c)} <span class="muted">${n}</span></span>`).join('')}</div>` : ''}`;
+  wireAsLinks($('#gOut'));
+  $('#lgToPath').onclick = () => { $('#aIn').value = lgPaths.join('\n'); $('#aRe').value = `_${origins[0]}$`; tab('path'); testPaths(); };
+  $('#lgToCom').onclick = () => { $('#cIn').value = lgComms.join(' '); tab('com'); decodeComms(); };
+  $('#lgToViz').onclick = () => { $('#vq').value = res; tab('viz'); visualize(); };
+  $('#lgCsv').onclick = () => download(`looking-glass-${res.replace(/[\/:]/g, '_')}.csv`, toCSV([['collector', 'location', 'peer', 'prefix', 'as_path', 'origin', 'next_hop', 'communities', 'large_communities'], ...rows.map(r => [r.rrc, r.loc, r.peer, r.prefix, r.as_path, r.origin, r.next_hop, r.community, r.largeCommunity])]), 'text/csv');
+  fillNames($('#gOut'));
+}
+
+/* ---------- visualize ---------- */
+async function lgFetch(res){
+  const d = await ripe('looking-glass', { resource: res });
+  const rows = d.rrcs.flatMap(r => r.peers.map(p => ({ ...p, rrc: r.rrc, loc: r.location, path: p.as_path.trim().split(/\s+/).map(Number).filter(n => !isNaN(n)) })));
+  return { d, rows };
+}
+const TIER1 = new Set([174, 209, 286, 701, 1239, 1299, 2828, 2914, 3257, 3320, 3356, 3491, 5511, 6453, 6461, 6762, 6830, 7018, 12956]);
+let VZ = null;
+async function visualize(){
+  const q = $('#vq').value.trim(); if (!q) return;
+  setParam('v', q);
+  const asn = /^(as)?\d+(\.\d+)?$/i.test(q) && !parseCIDR(q) ? parseASN(q) : null;
+  $('#vInfo').innerHTML = '';
+  $('#vOut').innerHTML = spin(asn != null ? `Loading neighbours of AS${asn}…` : 'Collecting routes from RIS collectors…');
+  try {
+    if (asn != null) {
+      VZ = { mode: 'nb', asn, nb: (await ripe('asn-neighbours', { resource: 'AS' + asn })).neighbours };
+      $('#vPathOpts').hidden = true;
+    } else {
+      const c = parseCIDR(q); if (!c) throw new Error('Enter a prefix, an IP address or an ASN.');
+      const res = c.p === bitsOf(c.v) ? fmtIP(c.n, c.v) : cidrStr(c.net, c.p, c.v);
+      const { rows } = await lgFetch(res);
+      if (!rows.length) throw new Error('No RIS collector currently has a route for this resource.');
+      VZ = { mode: 'path', res, rows };
+      const rrcs = [...new Map(rows.map(r => [r.rrc, r.loc])).entries()].sort();
+      $('#vRrc').innerHTML = `<option value="">All collectors (${rrcs.length})</option>` + rrcs.map(([k, l]) => `<option value="${esc(k)}">${esc(k)} — ${esc(l)}</option>`).join('');
+      $('#vPathOpts').hidden = false;
+    }
+    drawViz();
+  } catch (e) { $('#vOut').innerHTML = errBox(e); }
+}
+// unique (prepend-collapsed) paths -> nodes with hop distance to origin + weighted edges
+function pathModel(){
+  const rrc = $('#vRrc').value, max = +$('#vMax').value, byPath = new Map();
+  for (const r of VZ.rows) {
+    if (rrc && r.rrc !== rrc) continue;
+    const p = r.path.filter((a, i, arr) => !i || a !== arr[i - 1]); if (!p.length) continue;
+    const k = p.join(' '); if (!byPath.has(k)) byPath.set(k, { p, n: 0 }); byPath.get(k).n++;
+  }
+  const all = [...byPath.values()].sort((a, b) => b.n - a.n), paths = max ? all.slice(0, max) : all;
+  const nodes = new Map(), edges = new Map();
+  const node = a => { if (!nodes.has(a)) nodes.set(a, { a, dist: Infinity, w: 0, paths: new Set(), peer: false, origin: false }); return nodes.get(a); };
+  paths.forEach((P, pi) => {
+    const k = P.p.length;
+    P.p.forEach((a, i) => { const n = node(a); n.dist = Math.min(n.dist, k - 1 - i); n.w += P.n; n.paths.add(pi); if (i === 0) n.peer = true; if (i === k - 1) n.origin = true; });
+    for (let i = 0; i < k - 1; i++) { const key = P.p[i] + '>' + P.p[i + 1]; if (!edges.has(key)) edges.set(key, { a: P.p[i], b: P.p[i + 1], n: 0, paths: new Set() }); const e = edges.get(key); e.n += P.n; e.paths.add(pi); }
+  });
+  return { paths, total: all.length, routes: paths.reduce((s, x) => s + x.n, 0), nodes, edges };
+}
+// layered layout, ordered by weighted barycenter sweeps to reduce crossings
+function layoutLayers(nodes, edges){
+  const L = Math.max(0, ...[...nodes.values()].map(n => n.dist));
+  const layers = Array.from({ length: L + 1 }, () => []);
+  nodes.forEach(n => layers[n.dist].push(n));
+  layers.forEach(l => l.sort((x, y) => y.w - x.w));
+  const pos = new Map(), setPos = l => l.forEach((n, i) => pos.set(n.a, (i + 0.5) / l.length));
+  layers.forEach(setPos);
+  const nbr = new Map(), add = (x, y, c) => { if (!nbr.has(x)) nbr.set(x, []); nbr.get(x).push([y, c]); };
+  edges.forEach(e => { add(e.a, e.b, e.n); add(e.b, e.a, e.n); });
+  const bc = (n, d) => { let s = 0, w = 0; for (const [m, c] of nbr.get(n.a) || []) if (nodes.get(m).dist !== d) { s += pos.get(m) * c; w += c; } return w ? s / w : pos.get(n.a); };
+  for (let it = 0; it < 6; it++) for (const d of it % 2 ? [...layers.keys()].reverse() : [...layers.keys()]) {
+    const b = new Map(layers[d].map(n => [n.a, bc(n, d)])); layers[d].sort((x, y) => b.get(x.a) - b.get(y.a)); setPos(layers[d]);
+  }
+  return layers;
+}
+function drawViz(){
+  if (!VZ) return;
+  const cv = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const C = { text: cv('--text'), muted: cv('--muted'), border: cv('--border'), panel: cv('--panel'), bg: cv('--code-bg'), accent: cv('--accent'), soft: cv('--accent-soft'), warn: cv('--warn'), warnBg: cv('--warn-bg'), bad: cv('--bad'), badBg: cv('--bad-bg') };
+  const STY = { origin: [C.soft, C.accent, C.accent, 700], center: [C.soft, C.accent, C.accent, 700], tier1: [C.warnBg, C.warn, C.text, 600], bogon: [C.badBg, C.bad, C.bad, 600], peer: [C.bg, C.border, C.muted, 400, '3 2'], '': [C.bg, C.border, C.text, 400] };
+  const nw = a => 12 + ('AS' + a).length * 7.3, Wc = Math.max(640, ($('#vOut').clientWidth || 1000) - 4);
+  const nodes = [], edges = []; let W, H, summary;
+  if (VZ.mode === 'path') {
+    const m = pathModel(); VZ.model = m;
+    const layers = layoutLayers(m.nodes, m.edges), L = layers.length - 1, ROW = 26;
+    W = Math.max(Wc, (L + 1) * 140 + 80); H = Math.max(200, Math.max(...layers.map(l => l.length)) * ROW + 50);
+    layers.forEach((l, d) => l.forEach((n, i) => { n.x = L ? W - 70 - d * (W - 140) / L : W / 2; n.y = H / 2 + (i - (l.length - 1) / 2) * ROW; n.wd = nw(n.a); }));
+    const maxN = Math.max(1, ...[...m.edges.values()].map(e => e.n));
+    m.edges.forEach(e => { const A = m.nodes.get(e.a), B = m.nodes.get(e.b); edges.push({ A, B, back: A.dist <= B.dist, w: 1 + 5 * Math.sqrt(e.n / maxN), p: [...e.paths].join(' '), title: `AS${e.a} → AS${e.b} · ${e.n} route${e.n > 1 ? 's' : ''}` }); });
+    m.nodes.forEach(n => nodes.push({ a: n.a, x: n.x, y: n.y, wd: n.wd, kind: n.origin ? 'origin' : bogonASN(n.a) ? 'bogon' : TIER1.has(n.a) ? 'tier1' : n.peer ? 'peer' : '', p: [...n.paths].join(' ') }));
+    summary = `<b>${m.routes}</b> routes · <b>${m.paths.length}</b>${m.total > m.paths.length ? ` of ${m.total}` : ''} unique paths · <b>${m.nodes.size}</b> ASNs · ${L} hop${L !== 1 ? 's' : ''} from peer to origin`;
+  } else {
+    const by = t => VZ.nb.filter(x => x.type === t).sort((a, b) => b.power - a.power);
+    const upAll = by('left'), downAll = by('right'), up = upAll.slice(0, 25), down = downAll.slice(0, 25), ROW = 40;
+    W = Math.max(Wc, 760); H = Math.max(220, Math.max(up.length, down.length, 1) * ROW + 50);
+    const cx = W / 2, cy = H / 2, xl = Math.max(120, W * 0.17), xr = W - xl, maxP = Math.max(1, ...[...up, ...down].map(x => x.power));
+    const center = { a: VZ.asn, x: cx, y: cy, wd: nw(VZ.asn) + 8, kind: 'center', p: [...up, ...down].map((_, i) => i).join(' '), sub: 1 };
+    nodes.push(center);
+    const place = (list, xx, off, left) => list.forEach((nb, i) => {
+      const nd = { a: nb.asn, x: xx, y: cy + (i - (list.length - 1) / 2) * ROW, wd: nw(nb.asn), kind: bogonASN(nb.asn) ? 'bogon' : TIER1.has(nb.asn) ? 'tier1' : '', p: String(off + i), sub: 1 };
+      nodes.push(nd);
+      edges.push({ A: left ? nd : center, B: left ? center : nd, w: 1 + 5 * Math.sqrt(nb.power / maxP), p: String(off + i), title: `AS${left ? nb.asn : VZ.asn} → AS${left ? VZ.asn : nb.asn} · seen by ${nb.power} RIS peer${nb.power > 1 ? 's' : ''}` });
+    });
+    place(up, xl, 0, true); place(down, xr, up.length, false);
+    summary = `AS${VZ.asn} · upstreams / peers: top <b>${up.length}</b> of ${upAll.length} · downstreams: top <b>${down.length}</b> of ${downAll.length} <span class="muted">(line width = RIS peers seeing the link)</span>`;
+  }
+  const f = n => n.toFixed(1);
+  const ePath = e => { if (e.back) { const x1 = e.A.x + e.A.wd / 2, x2 = e.B.x + e.B.wd / 2, bx = Math.max(x1, x2) + 46; return `M${f(x1)},${f(e.A.y)} C${f(bx)},${f(e.A.y)} ${f(bx)},${f(e.B.y)} ${f(x2)},${f(e.B.y)}`; }
+    const x1 = e.A.x + e.A.wd / 2, x2 = e.B.x - e.B.wd / 2, mx = (x1 + x2) / 2; return `M${f(x1)},${f(e.A.y)} C${f(mx)},${f(e.A.y)} ${f(mx)},${f(e.B.y)} ${f(x2)},${f(e.B.y)}`; };
+  const svg = `<svg id="vsvg" xmlns="http://www.w3.org/2000/svg" width="${f(W)}" height="${f(H)}" viewBox="0 0 ${f(W)} ${f(H)}" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12">
+    <rect width="100%" height="100%" fill="${C.panel}"/>
+    <g>${edges.map(e => `<path class="e" d="${ePath(e)}" fill="none" stroke="${C.muted}" stroke-opacity=".45" stroke-width="${f(e.w)}" stroke-linecap="round" data-p="${e.p}"><title>${esc(e.title)}</title></path>`).join('')}</g>
+    <g>${nodes.map(n => { const [fill, stroke, color, wt, dash] = STY[n.kind];
+      return `<g class="n" data-a="${n.a}" data-p="${n.p}" transform="translate(${f(n.x)},${f(n.y)})"><title>AS${n.a}</title><rect x="${f(-n.wd / 2)}" y="-10" width="${f(n.wd)}" height="20" rx="5" fill="${fill}" stroke="${stroke}" stroke-width="${n.kind === 'center' ? 2 : 1.2}"${dash ? ` stroke-dasharray="${dash}"` : ''}/><text text-anchor="middle" dy="4" fill="${color}" font-weight="${wt}">AS${n.a}</text>${n.sub ? `<text class="nm" text-anchor="middle" y="23" font-size="10" fill="${C.muted}" font-family="system-ui,sans-serif"></text>` : ''}</g>`; }).join('')}</g></svg>`;
+  const lg = (bg, bd, t, dash) => `<span class="lgd"><i style="background:${bg};border-color:${bd}${dash ? ';border-style:dashed' : ''}"></i>${t}</span>`;
+  $('#vOut').innerHTML = `<div class="row" style="margin-top:0"><span>${summary}</span><span style="flex:1"></span>
+      ${lg(C.soft, C.accent, VZ.mode === 'path' ? 'Origin' : 'Selected AS')}${lg(C.warnBg, C.warn, 'Tier-1 transit')}${VZ.mode === 'path' ? lg(C.bg, C.border, 'RIS peer', 1) : ''}${lg(C.badBg, C.bad, 'Private / reserved')}<button id="vDl">SVG</button></div>
+    <div style="overflow:auto;max-height:78vh;border:1px solid var(--border);border-radius:10px;margin-top:8px">${svg}</div>`;
+  const el = $('#vsvg');
+  el.addEventListener('mouseover', e => { const g = e.target.closest('g.n'); if (!g) return; const ps = new Set(g.dataset.p.split(' ')), hit = x => x.dataset.p.split(' ').some(k => ps.has(k));
+    el.classList.add('hl'); $$('.e', el).forEach(x => x.classList.toggle('on', hit(x))); $$('g.n', el).forEach(x => x.classList.toggle('on', hit(x))); });
+  el.addEventListener('mouseout', e => { if (e.target.closest('g.n')) el.classList.remove('hl'); });
+  el.addEventListener('click', e => { const g = e.target.closest('g.n'); if (g) nodeInfo(+g.dataset.a); });
+  $('#vDl').onclick = () => download(`bgp-${VZ.mode === 'path' ? VZ.res.replace(/[\/:]/g, '_') : 'AS' + VZ.asn}.svg`, el.outerHTML, 'image/svg+xml');
+  pool([...new Set(nodes.map(n => n.a))].slice(0, 150), 6, async a => {
+    const h = await asName(a); if (!h || !el.isConnected) return;
+    $$(`g.n[data-a="${a}"]`, el).forEach(g => { g.querySelector('title').textContent = `AS${a} — ${h}`; const t = g.querySelector('text.nm'); if (t) t.textContent = h.length > 30 ? h.slice(0, 29) + '…' : h; });
+  });
+}
+function nodeInfo(a){
+  const k = asnKind(a), n = VZ.mode === 'path' ? VZ.model.nodes.get(a) : null;
+  $('#vInfo').innerHTML = `<div class="card" style="margin-top:10px"><div class="t"><span>${asLink(a)} <span class="muted" style="font-weight:400" data-name="${a}"></span></span><span>${TIER1.has(a) ? badge('warn', 'Tier-1') + ' ' : ''}${badge(k[0], k[1])}</span></div>
+    ${n ? `<p style="margin:0 0 8px">Carries <b>${n.w}</b> of ${VZ.model.routes} routes shown · ${n.dist === 0 ? 'origin' : `${n.dist} hop${n.dist > 1 ? 's' : ''} from the origin`}${n.peer ? ' · RIS peer' : ''}</p>` : ''}
+    <div class="row" style="margin-top:0"><button id="vCenter">Neighbour graph of AS${a}</button><button data-as="${a}">Full lookup →</button><span class="muted" style="font-size:12px">${extLinks(a)}</span></div></div>`;
+  wireAsLinks($('#vInfo'));
+  $('#vCenter').onclick = () => { $('#vq').value = 'AS' + a; visualize(); scrollTo({ top: 0, behavior: 'smooth' }); };
+  fillNames($('#vInfo'));
+}
+$('#vGo').onclick = visualize; $('#vq').addEventListener('keydown', e => e.key === 'Enter' && visualize());
+['#vMax', '#vRrc'].forEach(x => $(x).addEventListener('change', () => { $('#vInfo').innerHTML = ''; drawViz(); }));
+$('#themeBtn')?.addEventListener('click', () => setTimeout(drawViz, 0));
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => drawViz());
+
+/* ---------- RPKI ---------- */
+async function rpkiCheck(){
+  const n = parseASN($('#rAsn').value), c = parseCIDR($('#rPfx').value);
+  if (n == null || !c) { $('#rOut').innerHTML = '<div class="err">Enter an origin ASN and a prefix.</div>'; return; }
+  const pfx = cidrStr(c.net, c.p, c.v);
+  $('#rOut').innerHTML = spin('Validating…');
+  try {
+    const d = await ripe('rpki-validation', { resource: 'AS' + n, prefix: pfx });
+    const roas = d.validating_roas || [];
+    const why = { valid: `A ROA authorises AS${n} to originate ${pfx}.`, invalid_asn: `ROAs exist for this address space, but none authorise AS${n}. Networks doing ROV will drop this route.`, invalid_length: `AS${n} is authorised, but ${pfx} is more specific than the ROA's maxLength. Networks doing ROV will drop this route.`, unknown: 'No ROA covers this prefix, so ROV treats it as “not found” and does not filter it.' }[d.status] || '';
+    $('#rOut').innerHTML = `<div class="card" style="margin-top:12px"><div class="t"><span class="mono">AS${n} → ${esc(pfx)}</span>${rpkiBadge(d.status)}</div><p style="margin:0 0 8px">${esc(why)}</p>
+      ${roas.length ? `<table><thead><tr><th>ROA prefix</th><th>Max length</th><th>Authorised origin</th><th>Result</th></tr></thead><tbody>${roas.map(r => `<tr><td class="mono">${esc(r.prefix)}</td><td>/${r.max_length}</td><td>${asLink(+r.origin)}</td><td>${rpkiBadge(r.validity)}</td></tr>`).join('')}</tbody></table>` : '<p class="muted" style="margin:0">No covering ROAs.</p>'}
+      <p class="note">Validator: ${esc(d.validator || 'RIPEstat')}</p></div>`;
+    wireAsLinks($('#rOut'));
+  } catch (e) { $('#rOut').innerHTML = errBox(e); }
+}
+
+/* ---------- prefix lists ---------- */
+$('#pFetch').onclick = async () => {
+  const n = parseASN($('#pAs').value); if (n == null) { $('#pInfo').textContent = 'Enter an ASN'; return; }
+  $('#pInfo').innerHTML = '<span class="spin"></span> fetching…';
+  try { const d = await ripe('announced-prefixes', { resource: 'AS' + n }); $('#pIn').value = d.prefixes.map(p => p.prefix).join('\n'); $('#pName').value = `AS${n}-IN`; $('#pInfo').textContent = `${d.prefixes.length.toLocaleString()} prefixes announced by AS${n}`; genPL(); }
+  catch (e) { $('#pInfo').textContent = e.message; }
+};
+function genPL(){
+  const { out, bad } = parseRanges($('#pIn').value);
+  const le4 = +$('#pLe4').value, le6 = +$('#pLe6').value, name = $('#pName').value.trim().replace(/\s+/g, '-') || 'PFX-LIST', fmt = $('#pFmt').value;
+  let blocks = $('#pAgg').checked ? mergeRanges(out).flatMap(r => rangeToBlocks(r.s, r.e, r.v)) : out.flatMap(r => rangeToBlocks(r.s, r.e, r.v));
+  const dropped = [];
+  if ($('#pBogon').checked) blocks = blocks.filter(b => { const tooLong = b.v === 4 ? b.p > 24 : b.p > 48, sp = b.v === 4 ? v4Special(Number(b.net)) : (v6Special(b.net) || 'Global unicast') !== 'Global unicast' && v6Special(b.net); if (tooLong || sp) { dropped.push(cidrStr(b.net, b.p, b.v) + (sp ? ` (${sp})` : ' (too specific)')); return false; } return true; });
+  const c = b => cidrStr(b.net, b.p, b.v), L = b => Math.max(b.p, (b.v === 4 ? le4 : le6) || b.p);
+  const v4 = blocks.filter(b => b.v === 4), v6 = blocks.filter(b => b.v === 6), lines = [];
+  const seq = (i) => (i + 1) * 5;
+  switch (fmt) {
+    case 'ios':
+      v4.forEach((b, i) => lines.push(`ip prefix-list ${name} seq ${seq(i)} permit ${c(b)}${L(b) > b.p ? ' le ' + L(b) : ''}`));
+      v6.forEach((b, i) => lines.push(`ipv6 prefix-list ${name}-V6 seq ${seq(i)} permit ${c(b)}${L(b) > b.p ? ' le ' + L(b) : ''}`)); break;
+    case 'xr':
+      for (const [set, list] of [[name, v4], [name + '-V6', v6]]) if (list.length) lines.push(`prefix-set ${set}`, ...list.map((b, i) => `  ${c(b)}${L(b) > b.p ? ' le ' + L(b) : ''}${i < list.length - 1 ? ',' : ''}`), 'end-set', '!'); break;
+    case 'junos':
+      v4.forEach(b => lines.push(`set policy-options route-filter-list ${name} ${c(b)} ${L(b) > b.p ? 'upto /' + L(b) : 'exact'}`));
+      v6.forEach(b => lines.push(`set policy-options route-filter-list ${name}-V6 ${c(b)} ${L(b) > b.p ? 'upto /' + L(b) : 'exact'}`)); break;
+    case 'mikrotik':
+      lines.push('/routing filter rule');
+      blocks.forEach(b => lines.push(`add chain=${name} rule="if (dst in ${c(b)} && dst-len in ${b.p}-${L(b)}) { accept }"`));
+      lines.push(`add chain=${name} rule="reject"`); break;
+    case 'bird':
+      for (const [set, list] of [[name.replace(/-/g, '_') + '_V4', v4], [name.replace(/-/g, '_') + '_V6', v6]]) if (list.length) lines.push(`define ${set} = [`, ...list.map((b, i) => `  ${c(b)}${L(b) > b.p ? `{${b.p},${L(b)}}` : ''}${i < list.length - 1 ? ',' : ''}`), '];'); break;
+    case 'huawei':
+      v4.forEach((b, i) => lines.push(`ip ip-prefix ${name} index ${(i + 1) * 10} permit ${fmtIP(b.net, 4)} ${b.p}${L(b) > b.p ? ' less-equal ' + L(b) : ''}`));
+      v6.forEach((b, i) => lines.push(`ip ipv6-prefix ${name}-V6 index ${(i + 1) * 10} permit ${fmtIP(b.net, 6)} ${b.p}${L(b) > b.p ? ' less-equal ' + L(b) : ''}`)); break;
+    default: blocks.forEach(b => lines.push(c(b) + (L(b) > b.p ? ` (up to /${L(b)})` : '')));
+  }
+  $('#pOut').textContent = lines.join('\n') || '(no prefixes)';
+  $('#pStat').innerHTML = `${out.length.toLocaleString()} in → ${blocks.length.toLocaleString()} entries (${v4.length} IPv4, ${v6.length} IPv6)${dropped.length ? ` · <span title="${esc(dropped.slice(0, 40).join('\n'))}">${dropped.length} dropped</span>` : ''}${bad.length ? ` · ${bad.length} unreadable` : ''}`;
+}
+$('#pGo').onclick = genPL;
+['#pFmt', '#pLe4', '#pLe6', '#pAgg', '#pBogon'].forEach(s => $(s).addEventListener('change', () => $('#pIn').value.trim() && genPL()));
+$('#pCp').onclick = e => copyText($('#pOut').textContent, e.target);
+$('#pDl').onclick = () => download(`${$('#pName').value.trim() || 'prefix-list'}.txt`, $('#pOut').textContent);
+
+/* ---------- communities ---------- */
+const WELL_KNOWN = { 0: 'GRACEFUL_SHUTDOWN (RFC 8326) — lower preference, maintenance in progress', 1: 'ACCEPT_OWN (RFC 7611)', 2: 'ROUTE_FILTER_TRANSLATED_v4', 3: 'ROUTE_FILTER_v4', 4: 'ROUTE_FILTER_TRANSLATED_v6', 5: 'ROUTE_FILTER_v6', 6: 'LLGR_STALE (RFC 9494)', 7: 'NO_LLGR (RFC 9494)', 8: 'accept-own-nexthop',
+  666: 'BLACKHOLE (RFC 7999) — drop traffic to this prefix (RTBH)', 65281: 'NO_EXPORT — do not advertise outside this AS / confederation', 65282: 'NO_ADVERTISE — do not advertise to any peer', 65283: 'NO_EXPORT_SUBCONFED — do not advertise to external peers, even in the confederation', 65284: 'NOPEER (RFC 3765) — do not advertise to bilateral peers' };
+function decodeOne(tok, rs){
+  let m;
+  const t = tok.replace(/^\(|\)$/g, '');
+  if ((m = t.match(/^(rt|target|soo|origin|ro):(.+)$/i))) return ['Extended', `${/^(rt|target)$/i.test(m[1]) ? 'Route Target' : 'Site of Origin'} ${m[2]} (RFC 4360) — used by L3VPN / EVPN import & export policy`, parseASN(m[2].split(':')[0])];
+  if ((m = t.match(/^(\d+):(\d+):(\d+)$/))) { const a = +m[1], f = +m[2], p = +m[3];
+    const rsl = rs != null && a === rs ? (f === 0 ? `do not announce to AS${p}` : f === 1 ? `announce to AS${p}` : f >= 101 && f <= 103 ? `prepend ${f - 100}× to AS${p}` : null) : null;
+    return ['Large (RFC 8092)', rsl ? `Route server: ${rsl}` : `Defined by AS${a}: function ${f}, parameter ${p}${bogonASN(a) ? ' — private / reserved ASN as global admin' : ''}`, a]; }
+  if (/^\d{6,10}$/.test(t)) { const n = +t; if (n <= 4294967295) return decodeOne(`${Math.floor(n / 65536)}:${n % 65536}`, rs).map((x, i) => i === 1 ? `${x} <span class="muted">(${t} = ${Math.floor(n / 65536)}:${n % 65536})</span>` : x); }
+  if ((m = t.match(/^(\d+):(\d+)$/))) { const a = +m[1], b = +m[2]; if (a > 65535 || b > 65535) return ['?', 'Out of range for a standard community (16-bit:16-bit)', null];
+    if (a === 65535) return ['Well-known', WELL_KNOWN[b] || 'Reserved well-known range (65535:x)', null];
+    if (a === 0) return ['Reserved (0:x)', rs != null && b === rs ? 'Route server: do not announce to anyone' : `By convention (Euro-IX route servers): do not announce to AS${b}`, null];
+    if (rs != null && a === rs) return ['Route server', b === rs ? 'Announce to all peers' : `Announce to AS${b}`, a];
+    if (a >= 65501 && a <= 65503) return ['Prepend (convention)', `Common IXP convention: prepend ${a - 65500}× when announcing to AS${b}`, null];
+    if (a >= 64512) return ['Private ASN', `Operator-defined (private ASN ${a}) — meaning is local to whoever set it`, null];
+    return ['Standard', `Set by AS${a} — value ${b} is defined by that network (see their documentation / IRR remarks)`, a]; }
+  return ['?', 'Not a recognised community format', null];
+}
+async function decodeComms(){
+  const rs = parseASN($('#cRs').value || 'x');
+  const toks = [...new Set($('#cIn').value.split(/[\s,]+/).filter(Boolean))];
+  $('#cOut').innerHTML = `<div class="tablewrap" style="margin-top:10px"><table><thead><tr><th>Community</th><th>Type</th><th>Meaning</th><th>Set by</th></tr></thead><tbody>
+    ${toks.map(t => { const [type, mean, a] = decodeOne(t, rs); return `<tr><td class="mono"><b>${esc(t)}</b></td><td>${badge(type === 'Well-known' ? 'info' : type === '?' ? 'bad' : 'mute', type)}</td><td>${mean.includes('<span') ? mean : esc(mean)}</td><td>${a != null && !bogonASN(a) ? `${asLink(a)} <span class="muted" style="font-size:12px" data-name="${a}"></span>` : ''}</td></tr>`; }).join('')}</tbody></table></div>
+    <p class="note">Standard communities are only meaningful to the network whose ASN is in the first half — check that operator's published community list. Route-server conventions apply only when the first half is the IXP's route-server ASN.</p>`;
+  wireAsLinks($('#cOut')); fillNames($('#cOut'));
+}
+$('#cGo').onclick = decodeComms;
+
+/* ---------- AS-path regex ---------- */
+const PATH_EX = [['_13335$', 'originated by AS13335'], ['^6939_', 'learned from neighbour AS6939'], ['_3356_', 'passes through AS3356'], ['^$', 'locally originated'], ['^[0-9]+$', 'neighbour’s own routes'], ['^([0-9]+)(_\\1)*$', 'neighbour’s routes incl. prepends'], ['_(6451[2-9]|645[2-9][0-9]|64[6-9][0-9][0-9]|65[0-4][0-9][0-9]|655[0-2][0-9]|6553[0-4])_', 'contains a private ASN']];
+$('#aEx').innerHTML = PATH_EX.map(([r, d]) => `<span class="chip" data-re="${esc(r)}" title="${esc(d)}"><span class="mono">${esc(r)}</span> <span class="muted">${esc(d)}</span></span>`).join('');
+$('#aEx').onclick = e => { const c = e.target.closest('[data-re]'); if (c) { $('#aRe').value = c.dataset.re; testPaths(); } };
+function ciscoRe(s){ return new RegExp(s.replace(/_/g, '(?:^|$|[\\s{}(),])')); }
+function testPaths(){
+  let re; try { re = ciscoRe($('#aRe').value.trim()); } catch (e) { $('#aOut').innerHTML = `<div class="err">Invalid regex: ${esc(e.message)}</div>`; return; }
+  const paths = $('#aIn').value.split('\n').map(l => l.trim()).filter((l, i, a) => l && a.indexOf(l) === i);
+  const rows = paths.map(l => { const p = l.split(/\s+/).map(Number).filter(n => !isNaN(n)); const dedup = p.filter((a, i) => !i || a !== p[i - 1]);
+    const loop = dedup.length !== new Set(dedup).size, prep = p.length - dedup.length, bog = [...new Set(p.filter(bogonASN))];
+    return { l, p, ok: re.test(l), notes: [prep ? badge('info', `${prep} prepend${prep > 1 ? 's' : ''}`) : '', loop ? badge('bad', 'AS loop') : '', ...bog.map(a => badge('warn', `AS${a}: ${asnKind(a)[1].split(' (')[0]}`))].filter(Boolean) }; });
+  const m = rows.filter(r => r.ok).length;
+  $('#aOut').innerHTML = `<p><b>${m}</b> of ${rows.length} paths match <span class="mono">${esc($('#aRe').value)}</span> <span class="muted">— JS translation: <span class="mono">${esc(re.source)}</span></span></p>
+    <div class="tablewrap"><table><thead><tr><th></th><th>AS path</th><th>Checks</th></tr></thead><tbody>${rows.map(r => `<tr><td>${r.ok ? badge('ok', 'match') : badge('mute', 'no')}</td><td>${r.p.length ? pathHtml(r.p, r.p.at(-1)) : '<span class="muted">(empty — local)</span>'}</td><td>${r.notes.join(' ')}</td></tr>`).join('')}</tbody></table></div>
+    <p class="note">Cisco / Arista / FRR style: <span class="mono">_</span> matches a delimiter (space, start, end, braces), <span class="mono">^</span> is your neighbour side, <span class="mono">$</span> is the origin. Juniper uses whole-ASN terms instead (e.g. <span class="mono">.* 13335</span>).</p>`;
+  wireAsLinks($('#aOut')); fillNames($('#aOut'));
+}
+$('#aGo').onclick = testPaths;
+$('#aRe').addEventListener('keydown', e => e.key === 'Enter' && testPaths());
+
+/* ---------- ASN tools ---------- */
+async function asnTools(){
+  const toks = $('#nIn').value.split(/[\s,;]+/).filter(Boolean);
+  $('#nOut').innerHTML = `<div class="tablewrap" style="margin-top:10px"><table><thead><tr><th>Input</th><th>asplain</th><th>asdot</th><th>asdot+</th><th>Hex</th><th>Type</th><th>Holder</th></tr></thead><tbody>
+    ${toks.map(t => { const n = parseASN(t); if (n == null) return `<tr><td class="mono">${esc(t)}</td><td colspan="6">${badge('bad', 'not an ASN')}</td></tr>`; const k = asnKind(n);
+      return `<tr><td class="mono">${esc(t)}</td><td class="mono"><b>${n}</b></td><td class="mono">${asdot(n)}</td><td class="mono">${Math.floor(n / 65536)}.${n % 65536}</td><td class="mono">0x${n.toString(16).padStart(8, '0')}</td><td>${badge(k[0], k[1])}</td><td>${k[0] === 'ok' ? `${asLink(n)} <span class="muted" style="font-size:12px"${$('#nNames').checked ? ` data-name="${n}"` : ''}></span>` : ''}</td></tr>`; }).join('')}</tbody></table></div>`;
+  wireAsLinks($('#nOut')); if ($('#nNames').checked) fillNames($('#nOut'));
+}
+$('#nGo').onclick = asnTools;
+
+/* ---------- wiring ---------- */
+$('#lGo').onclick = lookup; $('#lq').addEventListener('keydown', e => e.key === 'Enter' && lookup());
+$('#gGo').onclick = lookingGlass; $('#gq').addEventListener('keydown', e => e.key === 'Enter' && lookingGlass());
+$('#rGo').onclick = rpkiCheck; [$('#rAsn'), $('#rPfx')].forEach(x => x.addEventListener('keydown', e => e.key === 'Enter' && rpkiCheck()));
+tab(TABS.some(([k]) => k === getParam('tab')) ? getParam('tab') : 'look');
+if (getParam('q')) { $('#lq').value = getParam('q'); tab('look'); lookup(); }
+else if (getParam('v')) { $('#vq').value = getParam('v'); tab('viz'); visualize(); }
+</script>
+
+</div>
+</body>
+</html>

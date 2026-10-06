@@ -1,6 +1,6 @@
 # NetOps Toolkit
 
-Browser-based OSINT and IT utilities for ISP operators, DNS admins and security teams. Static site — no backend, no tracking. Host it on GitHub Pages.
+A browser-based toolbox for ISP operators, network engineers, DNS admins and security teams. Static site — no backend, no tracking. Host it on GitHub Pages.
 
 | Tool | Mode | What it does |
 |---|---|---|
@@ -12,7 +12,9 @@ Browser-based OSINT and IT utilities for ISP operators, DNS admins and security 
 | Email Security Check | online | MX, SPF lookup count, DMARC, DKIM, MTA-STS, TLS-RPT, BIMI |
 | Email Header Analyzer | offline | Hop trace, delays, auth verdicts, phishing flags |
 | IOC Extractor & Defanger | offline | IPs, domains, URLs, hashes, CVEs, ATT&CK IDs |
-| Subnet Calculator | offline | IPv4/IPv6 math, VLSM split, CIDR aggregation |
+| Subnet Calculator | offline | IPv4/IPv6 math, VLSM planner, aggregation, subtraction, overlap finder, cheat sheet |
+| Subnet Visualizer | offline | Split/join address plans with notes, colors, block map and shareable links |
+| BGP Toolkit | online | ASN/prefix lookup, RPKI, looking-glass AS paths and path / neighbour graphs (RIPEstat), prefix lists, communities, AS-path regex |
 | Blocklist Converter | offline | RPZ, Unbound, dnsmasq, MikroTik, AdGuard, Squid, ipset |
 | PCAP Analyzer | offline | pcap/pcapng triage: port scans, DNS/DGA/tunneling, ICMP channels, follow stream, HTTP export, credentials |
 | MAC Address Lookup | online | OUI vendor, formats, randomized MAC, EUI-64 |
@@ -24,7 +26,7 @@ Browser-based OSINT and IT utilities for ISP operators, DNS admins and security 
 | Image Steganography | offline | Bit planes, channel views, LSB extraction and auto-scan |
 | RSA Toolkit | offline | d / decrypt, factoring (Fermat, Pollard rho, multi-prime), small-e and Wiener attacks |
 
-**Offline** tools never send data anywhere. **Online** tools call public APIs (Cloudflare/Google DoH, rdap.org, crt.sh, CertSpotter, ipwho.is, maclookup.app) directly from the visitor's browser.
+**Offline** tools never send data anywhere. **Online** tools call public APIs (Cloudflare/Google DoH, rdap.org, RIPEstat, crt.sh, CertSpotter, ipwho.is, maclookup.app) directly from the visitor's browser.
 
 ## Deploy
 Push this folder to a repo → Settings → Pages → Deploy from branch → `main` / root.
@@ -32,7 +34,7 @@ Push this folder to a repo → Settings → Pages → Deploy from branch → `ma
 ## Structure
 ```
 index.html          homepage — tool registry is the TOOLS array near the bottom
-assets/             style.css, common.js (theme, DoH, IP helpers), decoders.js (encodings, scoring, pattern highlighting)
+assets/             style.css, common.js (theme, DoH, IP helpers), netcalc.js (prefix math), decoders.js (encodings, scoring, pattern highlighting)
 src/<slug>.html     tool source fragments
 build.py            wraps src/*.html into tools/<slug>/index.html
 tools/<slug>/       built pages (commit these — Pages serves them)

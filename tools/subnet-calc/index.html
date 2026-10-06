@@ -4,27 +4,45 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Subnet Calculator · NetOps Toolkit</title>
-<meta name="description" content="IPv4 &amp; IPv6 subnet math — network, broadcast, host range, wildcard, reverse zone, VLSM split, CIDR aggregation and IP-in-range checks.">
+<meta name="description" content="IPv4 &amp; IPv6 subnet math — network, broadcast, host range, wildcard, reverse zone, splitting, VLSM planning, CIDR aggregation, subtraction, overlap detection and a prefix cheat sheet.">
 <link rel="stylesheet" href="../../assets/style.css">
 </head>
 <body>
 <div class="wrap">
   <a class="back" href="../../">← All tools</a>
   <header class="top">
-    <div><h1>Subnet Calculator</h1><p class="sub">IPv4 &amp; IPv6 subnet math — network, broadcast, host range, wildcard, reverse zone, VLSM split, CIDR aggregation and IP-in-range checks.</p></div>
+    <div><h1>Subnet Calculator</h1><p class="sub">IPv4 &amp; IPv6 subnet math — network, broadcast, host range, wildcard, reverse zone, splitting, VLSM planning, CIDR aggregation, subtraction, overlap detection and a prefix cheat sheet.</p></div>
     <button id="themeBtn" title="Toggle theme"></button>
   </header>
 <script src="../../assets/common.js"></script>
-<section class="panel">
-  <div class="row">
+<script src="../../assets/netcalc.js"></script>
+<div class="tabs" id="tabs" style="margin-top:0"></div>
+<div class="pane" id="pane-calc">
+  <div class="row" style="margin-top:0">
     <input type="text" id="q" class="grow mono" placeholder="192.168.10.37/26 · 10.0.0.1 255.255.252.0 · 2001:db8:abcd::/48" autocomplete="off" spellcheck="false">
     <button class="primary" id="go">Calculate</button>
   </div>
-</section>
-<div id="out"></div>
+  <div id="out"></div>
+</div>
 
-<section class="panel">
-  <h2>Aggregate / summarize CIDRs</h2>
+<div class="pane" id="pane-vlsm" hidden>
+  <div class="row" style="margin-top:0">
+    <label class="small" style="margin:0" for="vParent">Parent network</label>
+    <input type="text" id="vParent" class="mono" value="192.168.0.0/22" style="width:240px" spellcheck="false">
+    <label class="chk"><input type="checkbox" id="vGrow"> Add 20% growth headroom</label>
+  </div>
+  <label class="small" for="vReq" style="margin-top:10px">Subnets needed — one per line: name and required usable hosts</label>
+  <textarea id="vReq" spellcheck="false" style="min-height:130px" placeholder="Sales 120&#10;Engineering 250&#10;Servers 60&#10;Guest Wi-Fi 100&#10;WAN A 2&#10;WAN B 2">Sales 120
+Engineering 250
+Servers 60
+Guest Wi-Fi 100
+WAN A 2
+WAN B 2</textarea>
+  <div class="row"><button class="primary" id="vGo">Plan subnets</button></div>
+  <div id="vOut"></div>
+</div>
+
+<div class="pane" id="pane-agg" hidden>
   <p class="muted" style="margin:0 0 8px">One per line: CIDRs, single IPs or ranges (<span class="mono">10.0.0.5 - 10.0.0.90</span>). Merges overlaps and adjacent blocks into the smallest CIDR set. IPv4 and IPv6 can be mixed.</p>
   <textarea id="agg" spellcheck="false" style="min-height:130px" placeholder="10.0.0.0/24&#10;10.0.1.0/24&#10;10.0.2.0/23&#10;192.168.5.10 - 192.168.5.40"></textarea>
   <div class="row">
@@ -35,47 +53,60 @@
     <input type="text" id="listName" class="mono" value="my-list" style="width:120px" title="MikroTik address-list name">
   </div>
   <div id="aggOut"></div>
-</section>
+</div>
+
+<div class="pane" id="pane-sub" hidden>
+  <div class="grid2">
+    <div><label class="small" for="sBase">Start with (CIDRs / ranges)</label><textarea id="sBase" spellcheck="false" style="min-height:130px" placeholder="10.0.0.0/16">10.0.0.0/16</textarea></div>
+    <div><label class="small" for="sCut">Remove (CIDRs / ranges)</label><textarea id="sCut" spellcheck="false" style="min-height:130px" placeholder="10.0.4.0/24&#10;10.0.128.0/17">10.0.4.0/24
+10.0.128.0/17</textarea></div>
+  </div>
+  <div class="row"><button class="primary" id="sGo">Subtract</button><span class="muted">Shows what is left as the smallest set of CIDRs — handy for “everything except” firewall rules and finding free space.</span></div>
+  <div id="sOut"></div>
+</div>
+
+<div class="pane" id="pane-ovl" hidden>
+  <label class="small" for="oIn">CIDRs or ranges, one per line — anything after the prefix is kept as a label</label>
+  <textarea id="oIn" spellcheck="false" style="min-height:150px" placeholder="10.0.0.0/24 HQ LAN&#10;10.0.0.128/25 VoIP&#10;10.0.1.0/24 Branch&#10;10.0.1.0/24 Lab">10.0.0.0/24 HQ LAN
+10.0.0.128/25 VoIP
+10.0.1.0/24 Branch
+10.0.1.0/24 Lab
+10.0.2.0/23 DC</textarea>
+  <div class="row"><button class="primary" id="oGo">Find overlaps</button></div>
+  <div id="oOut"></div>
+</div>
+
+<div class="pane" id="pane-cheat" hidden>
+  <div class="grid2">
+    <div><h2>IPv4 prefixes</h2><div class="tablewrap" style="max-height:640px;overflow:auto"><table id="cheat4"></table></div></div>
+    <div><h2>IPv6 prefixes</h2><table id="cheat6"></table>
+      <h2 style="margin-top:18px">Special IPv4 ranges</h2><table id="cheatSp"></table></div>
+  </div>
+</div>
 
 <script>
-const ALL4 = (1n << 32n) - 1n, ALL6 = (1n << 128n) - 1n;
-const bitsOf = v => v === 4 ? 32 : 128;
-const fmt = (n, v) => v === 4 ? fmtIPv4(Number(n)) : fmtIPv6(n);
-const parseAny = s => { const a = parseIPv4(s); if (a != null) return { n: BigInt(a), v: 4 }; const b = parseIPv6(s); return b != null ? { n: b, v: 6 } : null; };
-const maskOf = (p, v) => { const B = bitsOf(v), all = v === 4 ? ALL4 : ALL6; return p === 0 ? 0n : all ^ ((1n << BigInt(B - p)) - 1n); };
-function maskToPrefix(m){   // accepts netmask (255.255.255.0) or wildcard (0.0.0.255)
-  const n = parseIPv4(m); if (n == null) return null;
-  const b = n.toString(2).padStart(32, '0');
-  if (/^1*0*$/.test(b)) return { p: b.indexOf('0') < 0 ? 32 : b.indexOf('0') };
-  if (/^0*1*$/.test(b)) return { p: b.indexOf('1') < 0 ? 32 : b.indexOf('1'), wildcard: true };
-  return null;
-}
-
-function parseCIDR(s){
-  s = s.trim().replace(/\s+/g, ' ');
-  let m = s.match(/^([^\s\/]+)\s*\/\s*(\d{1,3})$/), ip, p;
-  if (m) { ip = parseAny(m[1]); p = +m[2]; }
-  else if ((m = s.match(/^(\S+)\s+(\d+\.\d+\.\d+\.\d+)$/))) { ip = parseAny(m[1]); const r = maskToPrefix(m[2]); if (!r) return null; p = r.p; }
-  else { ip = parseAny(s); p = ip ? bitsOf(ip.v) : null; }
-  if (!ip || p == null || p > bitsOf(ip.v)) return null;
-  const mask = maskOf(p, ip.v), all = ip.v === 4 ? ALL4 : ALL6;
-  const net = ip.n & mask, last = net | (all ^ mask);
-  return { ...ip, p, mask, net, last, size: 1n << BigInt(bitsOf(ip.v) - p) };
-}
+/* ---------- tabs ---------- */
+const TABS = [['calc', 'Calculate'], ['vlsm', 'VLSM planner'], ['agg', 'Aggregate & check'], ['sub', 'Subtract'], ['ovl', 'Overlaps'], ['cheat', 'Cheat sheet']];
+$('#tabs').innerHTML = TABS.map(([k, n]) => `<button class="tab" data-t="${k}">${n}</button>`).join('');
+function tab(t){ TABS.forEach(([k]) => $('#pane-' + k).hidden = k !== t); $$('#tabs .tab').forEach(b => b.classList.toggle('on', b.dataset.t === t)); if (t === 'cheat') cheat(); }
+$('#tabs').onclick = e => { const b = e.target.closest('.tab'); if (b) tab(b.dataset.t); };
+const kv = o => `<div class="kv">${Object.entries(o).filter(([, x]) => x != null).map(([k, x]) => `<div>${k}</div><div>${x}</div>`).join('')}</div>`;
 const bin = (n, v, p) => { const s = n.toString(2).padStart(bitsOf(v), '0'); const g = v === 4 ? 8 : 16; let out = ''; for (let i = 0; i < s.length; i++) { if (i && i % g === 0) out += v === 4 ? '.' : ':'; out += i < p ? `<b>${s[i]}</b>` : `<span class="muted">${s[i]}</span>`; } return out; };
+const qlink = c => `<a href="?q=${encodeURIComponent(c)}" data-q="${esc(c)}" class="mono">${esc(c)}</a>`;
 
+/* ---------- calculate ---------- */
 function calc(){
   const raw = $('#q').value.trim(); if (!raw) return;
   setParam('q', raw);
   const c = parseCIDR(raw);
   if (!c) { $('#out').innerHTML = '<div class="err">Couldn\'t parse that. Try 10.1.2.3/24, 10.1.2.3 255.255.255.0 or 2001:db8::/32.</div>'; return; }
-  const { v, p, net, last, size, n } = c;
-  const kv = o => `<div class="kv">${Object.entries(o).filter(([, x]) => x != null).map(([k, x]) => `<div>${k}</div><div>${x}</div>`).join('')}</div>`;
+  const { v, p, net, last, size, n } = c, B = bitsOf(v);
+  const nb = { 'Parent': p > 0 ? qlink(cidrStr(net & maskOf(p - 1, v), p - 1, v)) : null,
+    'Previous / next': `${net > 0n ? qlink(cidrStr(net - size, p, v)) : '<span class="muted">—</span>'} · ${last < allOf(v) ? qlink(cidrStr(last + 1n, p, v)) : '<span class="muted">—</span>'}` };
   let info;
   if (v === 4) {
     const N = Number(net), L = Number(last), M = Number(c.mask);
-    const usable = p === 32 ? 1 : p === 31 ? 2 : Number(size) - 2;
-    const first = p >= 31 ? N : N + 1, lastH = p >= 31 ? L : L - 1;
+    const [u0, u1] = usableRange(net, p, v);
     const o1 = Number(n >> 24n);
     const cls = o1 < 128 ? 'A' : o1 < 192 ? 'B' : o1 < 224 ? 'C' : o1 < 240 ? 'D (multicast)' : 'E (reserved)';
     const special = v4Special(Number(n));
@@ -83,9 +114,9 @@ function calc(){
     const rz = p >= 24 ? (p === 24 ? `${oct[2]}.${oct[1]}.${oct[0]}.in-addr.arpa` : `${oct[3]}-${p}.${oct[2]}.${oct[1]}.${oct[0]}.in-addr.arpa <span class="muted">(RFC 2317 style)</span>`) : p >= 16 ? `${oct[1]}.${oct[0]}.in-addr.arpa${p > 16 ? ` <span class="muted">(+ ${2 ** (24 - p)} /24 zones)</span>` : ''}` : `${oct[0]}.in-addr.arpa${p > 8 ? ` <span class="muted">(+ ${2 ** (16 - p)} /16 zones)</span>` : ''}`;
     info = kv({
       'Address': `${esc(fmtIPv4(Number(n)))}`, 'Network': `<b>${fmtIPv4(N)}/${p}</b>`, 'Netmask': fmtIPv4(M), 'Wildcard': fmtIPv4((~M) >>> 0),
-      'Broadcast': p >= 31 ? '<span class="muted">n/a</span>' : fmtIPv4(L), 'Host range': `${fmtIPv4(first)} – ${fmtIPv4(lastH)}`,
-      'Usable hosts': usable.toLocaleString() + (p === 31 ? ' <span class="muted">(point-to-point, RFC 3021)</span>' : ''), 'Total addresses': Number(size).toLocaleString(),
-      'Type': special ? `<span class="b b-warn">${esc(special)}</span>` : '<span class="b b-ok">Public</span>', 'Class': cls,
+      'Broadcast': p >= 31 ? '<span class="muted">n/a</span>' : fmtIPv4(L), 'Host range': `${fmtIP(u0, 4)} – ${fmtIP(u1, 4)}`,
+      'Usable hosts': usableHosts(p, 4).toLocaleString() + (p === 31 ? ' <span class="muted">(point-to-point, RFC 3021)</span>' : ''), 'Total addresses': Number(size).toLocaleString(),
+      'Type': special ? `<span class="b b-warn">${esc(special)}</span>` : '<span class="b b-ok">Public</span>', 'Class': cls, ...nb,
       'Reverse zone': rz, 'Hex': '0x' + N.toString(16).padStart(8, '0').toUpperCase(), 'Integer': N.toString(),
       'Binary (addr)': `<span style="font-size:12px">${bin(n, 4, p)}</span>`, 'Binary (mask)': `<span style="font-size:12px">${bin(c.mask, 4, p)}</span>`,
       'Cisco ACL': `${fmtIPv4(N)} ${fmtIPv4((~M) >>> 0)}`,
@@ -96,20 +127,23 @@ function calc(){
       'Address': esc(fmtIPv6(n)), 'Expanded': fullIPv6(n), 'Network': `<b>${fmtIPv6(net)}/${p}</b>`, 'Range': `${fmtIPv6(net)}<br>${fmtIPv6(last)}`,
       'Total addresses': size.toLocaleString() + (p < 128 ? ` <span class="muted">(2^${128 - p})</span>` : ''),
       '/64 subnets': p <= 64 ? (1n << BigInt(64 - p)).toLocaleString() : '<span class="muted">smaller than a /64</span>',
-      'Type': special ? `<span class="b b-info">${esc(special)}</span>` : '—',
+      '/48 sites': p <= 48 ? (1n << BigInt(48 - p)).toLocaleString() : null,
+      'Type': special ? `<span class="b b-info">${esc(special)}</span>` : '—', ...nb,
       'Reverse zone': p % 4 === 0 ? net.toString(16).padStart(32, '0').slice(0, p / 4).split('').reverse().join('.') + '.ip6.arpa' : '<span class="muted">not on a nibble boundary</span>',
       'Netmask': fmtIPv6(c.mask),
     });
   }
-  const B = bitsOf(v), maxSplit = Math.min(B, p + 12);
-  $('#out').innerHTML = `<section class="panel"><div class="grid2"><div><h2>Result</h2>${info}</div>
+  const maxSplit = Math.min(B, p + 12);
+  $('#out').innerHTML = `<div class="grid2" style="margin-top:14px"><div><h2>Result</h2>${info}
+      <p style="margin-top:12px"><a class="btn" href="../subnet-visualizer/?q=${encodeURIComponent(cidrStr(net, p, v))}">Open in Subnet Visualizer →</a></p></div>
     <div><h2>Split into smaller subnets</h2>${p >= B ? '<p class="muted">Single address — nothing to split.</p>' : `
       <div class="row" style="margin-top:0"><select id="splitP">${Array.from({ length: maxSplit - p }, (_, i) => p + 1 + i).map(x => `<option value="${x}" ${x === Math.min(B, v === 4 ? p + 2 : (p < 64 ? 64 : p + 4)) ? 'selected' : ''}>/${x} — ${(1n << BigInt(x - p)).toLocaleString()} subnets</option>`).join('')}</select><button id="splitCopy">Copy</button></div>
-      <div class="tablewrap" style="max-height:420px;overflow:auto;margin-top:8px"><table><thead><tr><th>#</th><th>Subnet</th><th>Range</th></tr></thead><tbody id="splitBody"></tbody></table></div><p class="note" id="splitNote"></p>`}</div></div></section>`;
+      <div class="tablewrap" style="max-height:420px;overflow:auto;margin-top:8px"><table><thead><tr><th>#</th><th>Subnet</th><th>Range</th></tr></thead><tbody id="splitBody"></tbody></table></div><p class="note" id="splitNote"></p>`}</div></div>`;
+  $$('#out [data-q]').forEach(a => a.onclick = e => { e.preventDefault(); $('#q').value = a.dataset.q; calc(); });
   if (p < B) {
     const draw = () => {
-      const np = +$('#splitP').value, step = 1n << BigInt(B - np), count = 1n << BigInt(np - p), lim = count > 4096n ? 4096n : count;
-      const rows = []; for (let i = 0n; i < lim; i++) { const s = net + i * step; rows.push([`${fmt(s, v)}/${np}`, `${fmt(s, v)} – ${fmt(s + step - 1n, v)}`]); }
+      const np = +$('#splitP').value, step = blockSize(np, v), count = 1n << BigInt(np - p), lim = count > 4096n ? 4096n : count;
+      const rows = []; for (let i = 0n; i < lim; i++) { const s = net + i * step; rows.push([cidrStr(s, np, v), `${fmtIP(s, v)} – ${fmtIP(s + step - 1n, v)}`]); }
       $('#splitBody').innerHTML = rows.map((r, i) => `<tr><td class="muted">${i + 1}</td><td class="mono">${r[0]}</td><td class="mono" style="font-size:12px">${r[1]}</td></tr>`).join('');
       $('#splitNote').textContent = count > lim ? `Showing first ${lim} of ${count.toLocaleString()}.` : '';
       $('#splitCopy').onclick = e => copyText(rows.map(r => r[0]).join('\n'), e.target);
@@ -118,39 +152,36 @@ function calc(){
   }
 }
 
+/* ---------- VLSM ---------- */
+function vlsm(){
+  const parent = parseCIDR($('#vParent').value);
+  if (!parent) { $('#vOut').innerHTML = '<div class="err">Enter a parent network such as 192.168.0.0/22 or 2001:db8::/48.</div>'; return; }
+  const grow = $('#vGrow').checked, reqs = [], bad = [];
+  for (const raw of $('#vReq').value.split('\n')) { const l = raw.trim(); if (!l) continue; const m = l.match(/^(.*?)[\s,;:]+(\d+)$/); if (m) reqs.push({ name: m[1].trim() || 'subnet', need: +m[2], hosts: Math.ceil(+m[2] * (grow ? 1.2 : 1)) }); else bad.push(l); }
+  if (!reqs.length) { $('#vOut').innerHTML = '<div class="err">Add at least one line like “Sales 120”.</div>'; return; }
+  const { rows, free } = vlsmAllocate(parent, reqs), v = parent.v;
+  const ok = rows.filter(r => r.fits), used = ok.reduce((a, r) => a + blockSize(r.p, v), 0n), total = parent.size;
+  const pct = Number(used * 10000n / total) / 100;
+  const out = ok.map(r => { const [u0, u1] = usableRange(r.net, r.p, v), uh = usableHosts(r.p, v);
+    return { r, cidr: cidrStr(r.net, r.p, v), mask: v === 4 ? fmtIPv4(Number(maskOf(r.p, 4))) : '', range: `${fmtIP(u0, v)} – ${fmtIP(u1, v)}`, bc: v === 4 && r.p < 31 ? fmtIP(r.last, v) : '', uh, spare: uh - BigInt(r.need) }; });
+  $('#vOut').innerHTML = `<div class="row"><b>${ok.length}/${rows.length}</b>&nbsp;subnets allocated · ${used.toLocaleString()} of ${total.toLocaleString()} addresses used (${pct}%)
+      <span style="flex:1"></span><button id="vCopy">Copy</button><button id="vCsv">CSV</button><a class="btn" id="vVis">Open in Subnet Visualizer →</a></div>
+    ${rows.some(r => !r.fits) ? `<div class="err">Doesn't fit in ${esc(cidrStr(parent.net, parent.p, v))}: ${rows.filter(r => !r.fits).map(r => `${esc(r.name)} (${r.need.toLocaleString()} hosts${r.p != null ? ' → /' + r.p : ''})`).join(', ')}. Use a larger parent.</div>` : ''}
+    ${bad.length ? `<div class="err">Skipped lines without a host count: ${esc(bad.slice(0, 5).join(' · '))}</div>` : ''}
+    <div class="tablewrap" style="margin-top:10px"><table><thead><tr><th>Name</th><th>Needed</th><th>Subnet</th>${v === 4 ? '<th>Mask</th>' : ''}<th>Usable range</th>${v === 4 ? '<th>Broadcast</th>' : ''}<th>Usable</th><th>Spare</th></tr></thead><tbody>
+    ${out.map(o => `<tr><td><b>${esc(o.r.name)}</b></td><td>${o.r.need.toLocaleString()}</td><td class="mono"><b>${o.cidr}</b></td>${v === 4 ? `<td class="mono">${o.mask}</td>` : ''}<td class="mono" style="font-size:12px">${o.range}</td>${v === 4 ? `<td class="mono">${o.bc || '<span class="muted">n/a</span>'}</td>` : ''}<td>${o.uh.toLocaleString()}</td><td class="muted">${o.spare.toLocaleString()}</td></tr>`).join('')}</tbody></table></div>
+    <h3>Free space left</h3>${free.length ? `<pre style="max-height:200px">${esc(free.map(b => cidrStr(b.net, b.p, v)).join('\n'))}</pre>` : '<p class="muted">None — the parent is fully allocated.</p>'}`;
+  const lines = out.map(o => [o.r.name, o.r.need, o.cidr, o.mask, o.range.replace(' – ', ' - '), o.bc, o.uh.toString(), o.spare.toString()]);
+  $('#vCopy').onclick = e => copyText(lines.map(l => `${l[2].padEnd(v === 4 ? 18 : 30)} ${l[0]}`).join('\n'), e.target);
+  $('#vCsv').onclick = () => download('vlsm-plan.csv', toCSV([['name', 'needed', 'subnet', 'mask', 'usable_range', 'broadcast', 'usable', 'spare'], ...lines]), 'text/csv');
+  $('#vVis').href = `../subnet-visualizer/?q=${encodeURIComponent(cidrStr(parent.net, parent.p, v))}&alloc=${encodeURIComponent(out.map(o => `${o.r.name.replace(/[|=]/g, ' ')}=${o.cidr}`).join('|'))}`;
+}
+
 /* ---------- aggregation ---------- */
-function parseRanges(text){
-  const out = [], bad = [];
-  for (let line of text.split(/\n|,/)) {
-    line = line.replace(/#.*/, '').trim(); if (!line) continue;
-    const m = line.match(/^(\S+)\s*-\s*(\S+)$/);
-    if (m) { const a = parseAny(m[1]), b = parseAny(m[2]); if (a && b && a.v === b.v && a.n <= b.n) { out.push({ v: a.v, s: a.n, e: b.n }); continue; } }
-    const c = parseCIDR(line); if (c) out.push({ v: c.v, s: c.net, e: c.last }); else bad.push(line);
-  }
-  return { out, bad };
-}
-function rangeToCidrs(s, e, v){
-  const B = bitsOf(v), res = [];
-  while (s <= e) {
-    let p = B;
-    while (p > 0) { const blk = 1n << BigInt(B - p + 1); if (s % blk === 0n && s + blk - 1n <= e) p--; else break; }
-    res.push(`${fmt(s, v)}/${p}`); s += 1n << BigInt(B - p);
-  }
-  return res;
-}
-function aggregate(list){
-  const res = [];
-  for (const v of [4, 6]) {
-    const r = list.filter(x => x.v === v).sort((a, b) => (a.s < b.s ? -1 : a.s > b.s ? 1 : 0)), merged = [];
-    for (const x of r) { const L = merged.at(-1); if (L && x.s <= L.e + 1n) { if (x.e > L.e) L.e = x.e; } else merged.push({ ...x }); }
-    merged.forEach(m => res.push(...rangeToCidrs(m.s, m.e, v)));
-  }
-  return res;
-}
 let lastAgg = [];
 $('#aggGo').onclick = () => {
   const { out, bad } = parseRanges($('#agg').value);
-  lastAgg = aggregate(out);
+  lastAgg = aggregateRanges(out);
   const name = $('#listName').value.trim() || 'my-list';
   $('#aggOut').innerHTML = `<div class="row"><b>${out.length}</b>&nbsp;entries → <b>${lastAgg.length}</b>&nbsp;CIDRs
       <span style="flex:1"></span><button id="aggCp">Copy</button><button id="aggMt">Copy as MikroTik address-list</button></div>
@@ -164,14 +195,62 @@ $('#chkGo').onclick = () => {
   const ip = parseAny($('#chk').value.trim());
   if (!ip) { $('#aggOut').innerHTML = '<div class="err">Enter a valid IPv4 or IPv6 address to check.</div>'; return; }
   const { out } = parseRanges($('#agg').value);
-  const lines = $('#agg').value.split(/\n|,/).map(l => l.replace(/#.*/, '').trim()).filter(Boolean);
-  const hits = lines.filter(l => { const r = parseRanges(l).out[0]; return r && r.v === ip.v && ip.n >= r.s && ip.n <= r.e; });
+  const hits = out.filter(r => r.v === ip.v && ip.n >= r.s && ip.n <= r.e).map(r => r.line);
   $('#aggOut').innerHTML = `<div class="row">${hits.length ? `<span class="b b-ok">Inside</span> <span class="mono">${esc($('#chk').value.trim())}</span> matches ${hits.length} entr${hits.length > 1 ? 'ies' : 'y'}: <span class="mono">${esc(hits.join(', '))}</span>` : `<span class="b b-bad">Not inside</span> <span class="mono">${esc($('#chk').value.trim())}</span> is in none of the ${out.length} entries`}</div>`;
 };
+
+/* ---------- subtract ---------- */
+$('#sGo').onclick = () => {
+  const a = parseRanges($('#sBase').value), b = parseRanges($('#sCut').value);
+  const left = subtractRanges(a.out, b.out).flatMap(r => rangeToCidrs(r.s, r.e, r.v));
+  const bad = [...a.bad, ...b.bad];
+  $('#sOut').innerHTML = `<div class="row"><b>${left.length}</b>&nbsp;CIDRs remain<span style="flex:1"></span><button id="sCp">Copy</button></div>
+    ${bad.length ? `<div class="err">Skipped: <span class="mono">${esc(bad.slice(0, 5).join(', '))}</span></div>` : ''}
+    <pre style="margin-top:8px;max-height:360px">${esc(left.join('\n')) || '(nothing left)'}</pre>`;
+  $('#sCp').onclick = e => copyText(left.join('\n'), e.target);
+};
+
+/* ---------- overlaps ---------- */
+$('#oGo').onclick = () => {
+  const items = [], bad = [];
+  for (const raw of $('#oIn').value.split('\n')) {
+    const l = raw.replace(/#.*/, '').trim(); if (!l) continue;
+    const m = l.match(/^(\S+\s*-\s*\S+|\S+(?:\s+\d+\.\d+\.\d+\.\d+)?)(?:\s+(.*))?$/);
+    const r = m && parseRanges(m[1]).out[0];
+    if (r) items.push({ ...r, label: m[2] || '', text: m[1] }); else bad.push(l);
+  }
+  items.sort((a, b) => a.v - b.v || cmpBig(a.s, b.s) || cmpBig(b.e, a.e));
+  const hits = [];
+  for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length && items[j].v === items[i].v && items[j].s <= items[i].e; j++) {
+    const A = items[i], B = items[j];
+    const rel = A.s === B.s && A.e === B.e ? ['bad', 'duplicate'] : A.s <= B.s && A.e >= B.e ? ['warn', 'contains'] : ['bad', 'partial overlap'];
+    hits.push({ A, B, rel });
+  }
+  const show = x => `<span class="mono">${esc(x.text)}</span>${x.label ? ` <span class="muted">${esc(x.label)}</span>` : ''}`;
+  $('#oOut').innerHTML = `${bad.length ? `<div class="err">Skipped: <span class="mono">${esc(bad.slice(0, 5).join(', '))}</span></div>` : ''}
+    ${hits.length ? `<p><b>${hits.length}</b> conflict${hits.length > 1 ? 's' : ''} among ${items.length} entries.</p><div class="tablewrap"><table><thead><tr><th>Entry</th><th>Relation</th><th>Other entry</th></tr></thead><tbody>
+      ${hits.map(h => `<tr><td>${show(h.A)}</td><td><span class="b b-${h.rel[0]}">${h.rel[1]}</span></td><td>${show(h.B)}</td></tr>`).join('')}</tbody></table></div>`
+      : `<p><span class="b b-ok">No overlaps</span> across ${items.length} entries.</p>`}`;
+};
+
+/* ---------- cheat sheet ---------- */
+let cheatDone = false;
+function cheat(){
+  if (cheatDone) return; cheatDone = true;
+  $('#cheat4').innerHTML = '<thead><tr><th>Prefix</th><th>Netmask</th><th>Wildcard</th><th>Addresses</th><th>Usable</th><th>Fits in a /24</th></tr></thead><tbody>' +
+    Array.from({ length: 33 }, (_, p) => { const m = Number(maskOf(p, 4)); return `<tr><td class="mono"><b>/${p}</b></td><td class="mono">${fmtIPv4(m)}</td><td class="mono">${fmtIPv4((~m) >>> 0)}</td><td>${(2 ** (32 - p)).toLocaleString()}</td><td>${usableHosts(p, 4).toLocaleString()}</td><td class="muted">${p >= 24 ? '×' + 2 ** (p - 24) : (2 ** (24 - p)).toLocaleString() + ' /24s'}</td></tr>`; }).join('') + '</tbody>';
+  $('#cheat6').innerHTML = '<thead><tr><th>Prefix</th><th>Typical use</th><th>/64s inside</th></tr></thead><tbody>' + [
+    [32, 'Minimum ISP / LIR allocation'], [40, 'Large customer / regional block'], [44, 'Mid-size site aggregate'], [48, 'Site / organisation assignment'], [56, 'Home or small-business customer'], [60, 'Some ISPs’ residential delegation'],
+    [64, 'Single LAN / VLAN (SLAAC needs exactly /64)'], [112, 'Some point-to-point conventions'], [126, 'Point-to-point (legacy)'], [127, 'Point-to-point link (RFC 6164)'], [128, 'Single host / loopback'],
+  ].map(([p, u]) => `<tr><td class="mono"><b>/${p}</b></td><td>${u}</td><td>${p <= 64 ? (2n ** BigInt(64 - p)).toLocaleString() : '<span class="muted">—</span>'}</td></tr>`).join('') + '</tbody>';
+  $('#cheatSp').innerHTML = '<tbody>' + V4_SPECIAL.map(([c, l]) => `<tr><td class="mono">${c}</td><td>${esc(l)}</td></tr>`).join('') + '</tbody>';
+}
 
 $('#go').onclick = calc;
 $('#q').addEventListener('keydown', e => e.key === 'Enter' && calc());
 $('#chk').addEventListener('keydown', e => e.key === 'Enter' && $('#chkGo').click());
+$('#vGo').onclick = vlsm;
+tab('calc');
 if (getParam('q')) { $('#q').value = getParam('q'); calc(); }
 </script>
 
