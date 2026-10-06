@@ -85,8 +85,8 @@ footer a{color:var(--muted)}
   </nav>
 
   <section class="hero">
-    <h1>Small tools for <span>network, OSINT &amp; CTF</span> work.</h1>
-    <p>Browser-based OSINT, CTF and IT utilities for ISP operators, DNS admins, security folks and CTF players. <b>Offline</b> tools never send your data anywhere; <b>online</b> tools query public APIs (DoH, RDAP, CT logs) straight from your browser.</p>
+    <h1>Small tools for <span>network, OSINT &amp; NOC</span> work.</h1>
+    <p>Browser-based OSINT and IT utilities for ISP operators, DNS admins and security folks. <b>Offline</b> tools never send your data anywhere; <b>online</b> tools query public APIs (DoH, RDAP, CT logs) straight from your browser.</p>
     <div class="points"><span>No backend</span><span>No sign-up</span><span>No tracking</span><span>Open source</span></div>
   </section>
 
@@ -135,17 +135,17 @@ const TOOLS = [
     desc: 'Vendor (OUI) lookup, Cisco/colon/hyphen formats, randomized-MAC detection, HSRP/VRRP addresses and EUI-64.' },
   { name: 'Encode / Decode Toolbox', href: 'tools/encode-decode/', tags: ['Utilities'], icon: 'term', mode: 'offline',
     desc: 'Base64, URL, hex, HTML, JWT, punycode, MD5/SHA hashes for text or files, Unix timestamps, JSON, UUIDs and passwords.' },
-  { name: 'Magic Decoder', href: 'tools/magic-decoder/', tags: ['CTF', 'Utilities'], icon: 'wand', mode: 'offline',
-    desc: 'Recursively tries Base64/32/58/85, hex, binary, URL, Morse, ROT, gzip and more on a blob until the flag falls out.' },
-  { name: 'Classical Cipher Solver', href: 'tools/cipher-solver/', tags: ['CTF'], icon: 'key', mode: 'offline',
+  { name: 'Recursive Decoder', href: 'tools/recursive-decoder/', tags: ['Utilities'], icon: 'wand', mode: 'offline',
+    desc: 'Recursively tries Base64/32/58/85, hex, binary, URL, Morse, ROT, gzip and more on a blob until readable text appears.' },
+  { name: 'Classical Cipher Solver', href: 'tools/cipher-solver/', tags: ['Utilities'], icon: 'key', mode: 'offline',
     desc: 'Caesar brute force, Vigenère auto-crack, Affine, Rail fence, Bacon, Polybius, Morse, A1Z26 — with frequency analysis and IoC.' },
-  { name: 'XOR Cracker', href: 'tools/xor-cracker/', tags: ['CTF'], icon: 'xor', mode: 'offline',
-    desc: 'Single-byte brute force, repeating-key recovery by Hamming distance, and key derivation from known plaintext like flag{.' },
-  { name: 'File Analyzer', href: 'tools/file-analyzer/', tags: ['CTF', 'Security'], icon: 'file', mode: 'offline',
-    desc: 'Magic bytes, embedded-file carving, PNG CRC check with dimension fixer, JPEG comments, ZIP listing, strings, entropy, hex view.' },
-  { name: 'Image Steganography', href: 'tools/image-stego/', tags: ['CTF'], icon: 'image', mode: 'offline',
+  { name: 'XOR Cracker', href: 'tools/xor-cracker/', tags: ['Utilities'], icon: 'xor', mode: 'offline',
+    desc: 'Single-byte brute force, repeating-key recovery, known-plaintext key derivation (completes keys longer than the crib) and keys guessed from context text.' },
+  { name: 'File Analyzer', href: 'tools/file-analyzer/', tags: ['Utilities', 'Security'], icon: 'file', mode: 'offline',
+    desc: 'Magic bytes, embedded-file carving, EXIF/GPS/XMP metadata with ciphertext spotting, PNG CRC dimension fixer, ZIP listing, strings, entropy, hex view.' },
+  { name: 'Image Steganography', href: 'tools/image-stego/', tags: ['Utilities'], icon: 'image', mode: 'offline',
     desc: 'Bit-plane and channel viewer, pixel inspector, configurable LSB extraction and an automatic LSB scan for hidden data.' },
-  { name: 'RSA Toolkit', href: 'tools/rsa-toolkit/', tags: ['CTF'], icon: 'lock', mode: 'offline',
+  { name: 'RSA Toolkit', href: 'tools/rsa-toolkit/', tags: ['Utilities'], icon: 'lock', mode: 'offline',
     desc: 'Compute d and decrypt; factor weak n (small factors, Fermat, Pollard rho, multi-prime); small-e and Wiener attacks.' },
 ];
 

@@ -1,4 +1,4 @@
-<!-- title: RSA Toolkit | desc: Solve textbook-RSA challenges — compute d, decrypt, factor weak moduli (small factors, Fermat, Pollard rho, perfect squares, multi-prime) and run small-e and Wiener attacks. Fully offline. | js: decoders -->
+<!-- title: RSA Toolkit | desc: Textbook RSA — compute d, decrypt, factor weak moduli (small factors, Fermat, Pollard rho, perfect squares, multi-prime) and run small-e and Wiener attacks. Fully offline. | js: decoders -->
 <section class="panel">
   <div class="grid2">
     <div>
@@ -173,7 +173,7 @@ async function solve(){
     if (m != null) {
       const by = toBytes(m), txt = asLatin(by), flags = findFlags(txt);
       rows.push(['m (decimal)', m], ['m (hex)', '0x' + m.toString(16)], ['m (text)', `<span style="white-space:pre-wrap">${hlFlags(printableRatio(by) > 0.7 ? tdUtf8.decode(by) : safeText(by))}</span>`]);
-      res = flags.length ? `<div class="row" style="margin-top:0;margin-bottom:10px"><span class="b b-ok">Flag</span> <b class="mono">${esc(flags[0])}</b> <button id="cpf">Copy</button></div>` : '';
+      res = flags.length ? `<div class="row" style="margin-top:0;margin-bottom:10px"><span class="b b-ok">Match</span> <b class="mono">${esc(flags[0])}</b> <button id="cpf">Copy</button></div>` : '';
     } else if (c == null) log('No ciphertext supplied — showing key material only');
     show(`<section class="panel"><h2>Result</h2>${res}<div class="kv">${rows.map(([k, v]) => `<div>${k}</div><div>${typeof v === 'bigint' ? v.toString() : v}</div>`).join('')}</div></section>`);
     const cp = $('#cpf'); if (cp) cp.onclick = () => copyText(findFlags(asLatin(toBytes(m)))[0], cp);
@@ -182,12 +182,12 @@ async function solve(){
 $('#go').onclick = solve;
 $('#clear').onclick = () => { ['n', 'c', 'p', 'q', 'd', 'fx'].forEach(k => $('#' + k).value = ''); $('#e').value = '65537'; $('#out').innerHTML = ''; };
 $('#sample').onclick = () => {
-  // close primes → Fermat; message "flag{close_primes_are_bad}"
+  // close primes → Fermat; message "close primes are bad"
   const p = 0xd7e3d5ffb59bb22e51bc5e2d7e1bd31da0fb15de5fd7ec5ee0c3ed21b38c4c37n;
   let q = p + 2n; while (!isPrime(q)) q += 2n;
   const pp = isPrime(p) ? p : (() => { let x = p | 1n; while (!isPrime(x)) x += 2n; return x; })();
   if (q === pp) { q += 2n; while (!isPrime(q)) q += 2n; }
-  const n = pp * q, e = 65537n, m = BigInt('0x' + toHex(te.encode('flag{close_primes_are_bad}')));
+  const n = pp * q, e = 65537n, m = BigInt('0x' + toHex(te.encode('close primes are bad')));
   $('#n').value = n; $('#e').value = e; $('#c').value = modpow(m, e, n); ['p', 'q', 'd', 'fx'].forEach(k => $('#' + k).value = ''); solve();
 };
 </script>

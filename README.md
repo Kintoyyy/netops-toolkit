@@ -1,6 +1,6 @@
 # NetOps Toolkit
 
-Browser-based OSINT, CTF and IT utilities for ISP operators, DNS admins and security teams. Static site — no backend, no tracking. Host it on GitHub Pages.
+Browser-based OSINT and IT utilities for ISP operators, DNS admins and security teams. Static site — no backend, no tracking. Host it on GitHub Pages.
 
 | Tool | Mode | What it does |
 |---|---|---|
@@ -16,10 +16,10 @@ Browser-based OSINT, CTF and IT utilities for ISP operators, DNS admins and secu
 | Blocklist Converter | offline | RPZ, Unbound, dnsmasq, MikroTik, AdGuard, Squid, ipset |
 | MAC Address Lookup | online | OUI vendor, formats, randomized MAC, EUI-64 |
 | Encode / Decode Toolbox | offline | Base64, URL, hex, JWT, hashes, timestamps, generators |
-| Magic Decoder | offline | Recursive auto-decoding (Base64/32/58/85, hex, binary, Morse, ROT, gzip…) until a flag appears |
+| Recursive Decoder | offline | Recursive auto-decoding (Base64/32/58/85, hex, binary, Morse, ROT, gzip…) until readable text appears |
 | Classical Cipher Solver | offline | Caesar, Vigenère auto-crack, Affine, Rail fence, Bacon, Polybius, Morse, A1Z26, IoC |
-| XOR Cracker | offline | Single-byte brute force, repeating-key recovery, known-plaintext key derivation |
-| File Analyzer | offline | Magic bytes, embedded-file carving, PNG CRC/dimension fix, JPEG/ZIP structure, strings, entropy |
+| XOR Cracker | offline | Single-byte brute force, repeating-key recovery, known-plaintext key derivation + completion, keys from context text |
+| File Analyzer | offline | Magic bytes, embedded-file carving, EXIF/GPS/XMP metadata (spots hex/base64 → XOR Cracker), PNG CRC/dimension fix, JPEG/ZIP structure, strings, entropy |
 | Image Steganography | offline | Bit planes, channel views, LSB extraction and auto-scan |
 | RSA Toolkit | offline | d / decrypt, factoring (Fermat, Pollard rho, multi-prime), small-e and Wiener attacks |
 
@@ -31,7 +31,7 @@ Push this folder to a repo → Settings → Pages → Deploy from branch → `ma
 ## Structure
 ```
 index.html          homepage — tool registry is the TOOLS array near the bottom
-assets/             style.css, common.js (theme, DoH, IP helpers), decoders.js (encodings, scoring, flag regex)
+assets/             style.css, common.js (theme, DoH, IP helpers), decoders.js (encodings, scoring, pattern highlighting)
 src/<slug>.html     tool source fragments
 build.py            wraps src/*.html into tools/<slug>/index.html
 tools/<slug>/       built pages (commit these — Pages serves them)

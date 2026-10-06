@@ -1,4 +1,4 @@
-<!-- title: File Analyzer | desc: Forensics for CTF files — magic bytes, embedded-file carving (binwalk-style), PNG chunk/CRC check with width/height fixer, JPEG comments, ZIP listing, strings, entropy and hex view. Fully offline. | js: decoders -->
+<!-- title: File Analyzer | desc: File forensics — magic bytes, embedded-file carving (binwalk-style), PNG chunk/CRC check with width/height fixer, JPEG comments, ZIP listing, strings, entropy and hex view. Fully offline. | js: decoders -->
 <section class="panel" id="drop" style="text-align:center;border-style:dashed;padding:28px">
   <p style="margin:0 0 10px"><b>Drop a file here</b> or</p>
   <label class="btn" for="file" style="background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600">Choose file…</label><input type="file" id="file">
@@ -116,6 +116,70 @@ function zipInfo(b){
   }
   return { entries, comment, end: eocd + 22 + clen };
 }
+/* ---------- EXIF / XMP metadata ---------- */
+const EXIF_TAGS = {0x010e:'ImageDescription',0x010f:'Make',0x0110:'Model',0x0112:'Orientation',0x011a:'XResolution',0x011b:'YResolution',0x0131:'Software',0x0132:'DateTime',0x013b:'Artist',0x013c:'HostComputer',0x8298:'Copyright',
+  0x829a:'ExposureTime',0x829d:'FNumber',0x8827:'ISO',0x9000:'ExifVersion',0x9003:'DateTimeOriginal',0x9004:'DateTimeDigitized',0x9010:'OffsetTime',0x920a:'FocalLength',0x927c:'MakerNote',0x9286:'UserComment',
+  0xa002:'PixelXDimension',0xa003:'PixelYDimension',0xa420:'ImageUniqueID',0xa430:'CameraOwnerName',0xa431:'BodySerialNumber',0xa433:'LensMake',0xa434:'LensModel',0xa435:'LensSerialNumber',
+  0x9c9b:'XPTitle',0x9c9c:'XPComment',0x9c9d:'XPAuthor',0x9c9e:'XPKeywords',0x9c9f:'XPSubject'};
+const GPS_TAGS = {0:'GPSVersionID',1:'GPSLatitudeRef',2:'GPSLatitude',3:'GPSLongitudeRef',4:'GPSLongitude',5:'GPSAltitudeRef',6:'GPSAltitude',7:'GPSTimeStamp',29:'GPSDateStamp'};
+function parseTiff(t){
+  if (t.length < 8) return [];
+  const le = t[0] === 0x49;
+  const g16 = o => le ? t[o] | (t[o + 1] << 8) : (t[o] << 8) | t[o + 1];
+  const g32 = o => (le ? t[o] | (t[o + 1] << 8) | (t[o + 2] << 16) | (t[o + 3] << 24) : (t[o] << 24) | (t[o + 1] << 16) | (t[o + 2] << 8) | t[o + 3]) >>> 0;
+  const SIZE = {1:1,2:1,3:2,4:4,5:8,6:1,7:1,8:2,9:4,10:8,11:4,12:8};
+  const out = [], seen = new Set();
+  const walk = (off, ifd) => {
+    if (!off || off + 2 > t.length || seen.has(off)) return; seen.add(off);
+    const n = g16(off);
+    for (let i = 0; i < n && off + 14 + i * 12 <= t.length; i++) {
+      const e = off + 2 + i * 12, tag = g16(e), type = g16(e + 2), cnt = g32(e + 4), size = (SIZE[type] || 1) * cnt;
+      if (tag === 0x8769 || tag === 0x8825) { walk(g32(e + 8), tag === 0x8825 ? 'GPS' : 'Exif'); continue; }
+      const vo = size <= 4 ? e + 8 : g32(e + 8); if (vo + size > t.length) continue;
+      const raw = t.subarray(vo, vo + size); let val;
+      if (type === 2) val = asLatin(raw).replace(/\0+$/, '');
+      else if (type === 3 || type === 8) val = Array.from({ length: Math.min(cnt, 16) }, (_, k) => g16(vo + 2 * k)).join(', ');
+      else if (type === 4 || type === 9) val = Array.from({ length: Math.min(cnt, 16) }, (_, k) => g32(vo + 4 * k)).join(', ');
+      else if (type === 5 || type === 10) val = Array.from({ length: Math.min(cnt, 16) }, (_, k) => { let a = g32(vo + 8 * k), d = g32(vo + 8 * k + 4); if (type === 10) { a |= 0; d |= 0; } return d ? +(a / d).toFixed(6) : a; }).join(', ');
+      else if (tag === 0x9286) val = /^UNICODE\0/.test(asLatin(raw.subarray(0, 8))) ? new TextDecoder(le ? 'utf-16le' : 'utf-16be').decode(raw.subarray(8)) : asLatin(raw.subarray(8)).replace(/\0+$/, '');
+      else if (tag >= 0x9c9b && tag <= 0x9c9f) val = new TextDecoder('utf-16le').decode(raw).replace(/\0+$/, '');
+      else val = printableRatio(raw) > 0.9 ? asLatin(raw).replace(/\0+$/, '') : toHex(raw.subarray(0, 64), ' ') + (raw.length > 64 ? ' …' : '');
+      out.push({ ifd, name: (ifd === 'GPS' ? GPS_TAGS : EXIF_TAGS)[tag] || '0x' + tag.toString(16).padStart(4, '0'), val: String(val) });
+    }
+    if (ifd === 'IFD0') walk(g32(off + 2 + n * 12), 'IFD1');
+  };
+  walk(g32(4), 'IFD0');
+  // decimal GPS position
+  const gv = n => out.find(x => x.ifd === 'GPS' && x.name === n)?.val;
+  const dms = (v, ref) => { if (!v) return null; const [d, m = 0, s = 0] = v.split(', ').map(Number); return (d + m / 60 + s / 3600) * (/^[SW]/.test(ref || '') ? -1 : 1); };
+  const lat = dms(gv('GPSLatitude'), gv('GPSLatitudeRef')), lon = dms(gv('GPSLongitude'), gv('GPSLongitudeRef'));
+  if (lat != null && lon != null) out.push({ ifd: 'GPS', name: 'Position', val: `${lat.toFixed(6)}, ${lon.toFixed(6)}`, map: `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=16/${lat}/${lon}` });
+  return out;
+}
+function metadata(b, types){
+  const items = [];
+  const xmp = s => items.push({ ifd: 'XMP', name: 'XMP packet', val: s.replace(/\s+/g, ' ').slice(0, 3000) });
+  if (types.some(t => t.ext === 'jpg')) for (const s of jpegInfo(b).segs) {
+    if (s.m !== 'APP1') continue;
+    const body = b.subarray(s.off + 4, s.off + 2 + s.len), hdr = asLatin(body.subarray(0, 29));
+    if (hdr.startsWith('Exif\0')) items.push(...parseTiff(body.subarray(6)));
+    else if (hdr.startsWith('http://ns.adobe.com/xap/1.0/')) xmp(tdUtf8.decode(body.subarray(29)));
+  }
+  if (types.some(t => t.ext === 'png')) for (const c of pngInfo(b).chunks) {
+    if (c.type === 'eXIf') items.push(...parseTiff(b.subarray(c.off + 8, c.off + 8 + c.len)));
+  }
+  if (types.some(t => t.ext === 'tif')) items.push(...parseTiff(b));
+  if (!items.some(x => x.ifd === 'XMP')) { const s = asLatin(b), i = s.indexOf('<x:xmpmeta'); if (i >= 0) xmp(tdUtf8.decode(b.subarray(i, i + 20000)).split('</x:xmpmeta>')[0]); }
+  return items;
+}
+// spot ciphertext-looking runs inside a metadata value
+function encodedRuns(s){
+  const out = [];
+  for (const m of s.matchAll(/\b(?:0x)?((?:[0-9a-f]{2}){8,})\b/gi)) out.push({ fmt: 'hex', v: m[1] });
+  for (const m of s.matchAll(/[A-Za-z0-9+/]{16,}={0,2}/g)) if (!/^[0-9a-f]+$/i.test(m[0]) && m[0].replace(/=+$/, '').length % 4 !== 1 && /[0-9+/]/.test(m[0]) && /[a-z]/.test(m[0]) && /[A-Z]/.test(m[0])) out.push({ fmt: 'base64', v: m[0] });
+  return out;
+}
+
 function strings(b, min, utf16){
   const out = []; let cur = '', start = 0;
   if (!utf16) { for (let i = 0; i <= b.length; i++) { const x = b[i]; if (i < b.length && ((x >= 32 && x < 127) || x === 9)) { if (!cur) start = i; cur += String.fromCharCode(x); } else { if (cur.length >= min) out.push([start, cur]); cur = ''; } } }
@@ -132,7 +196,7 @@ function render(){
   let html = `<section class="panel"><div class="row" style="margin-top:0"><b class="mono" style="font-size:15px">${esc(NAME)}</b>
     ${types.map(t => `<span class="b b-info">${esc(t.name)}${t.ext === 'riff' ? ' ' + esc(riffType(b, 0)) : ''}</span>`).join(' ') || '<span class="b b-mute">unknown type</span>'}
     <span class="muted">${b.length.toLocaleString()} bytes · entropy ${ent.toFixed(3)} bits/byte ${ent > 7.5 ? '(compressed/encrypted)' : ent < 5 ? '(text-like / sparse)' : ''}</span></div>
-    ${flagsFound.length ? `<div style="margin-top:8px"><span class="b b-ok">flag-like strings in raw bytes</span> ${flagsFound.map(f => `<mark class="mono">${esc(f)}</mark>`).join(' ')}</div>` : ''}
+    ${flagsFound.length ? `<div style="margin-top:8px"><span class="b b-ok">pattern matches in raw bytes</span> ${flagsFound.map(f => `<mark class="mono">${esc(f)}</mark>`).join(' ')}</div>` : ''}
     <div class="note">First bytes: <span class="mono">${toHex(b.subarray(0, 16), ' ')}</span></div>
     <canvas id="entc" height="60" style="width:100%;margin-top:8px;display:block"></canvas><div class="note" style="margin-top:2px">Entropy across the file (higher = compressed / encrypted regions).</div></section>`;
 
@@ -165,8 +229,24 @@ function render(){
       ${b.length > z.end ? `<div class="err">${(b.length - z.end).toLocaleString()} bytes after the end of the ZIP. <button data-carve="${z.end}:${b.length}:bin">Extract</button></div>` : ''}</section>`;
   }
 
+  // metadata
+  const meta = metadata(b, types);
+  if (meta.length) {
+    const runs = meta.flatMap(m => encodedRuns(m.val));
+    // every other metadata value becomes a candidate-key wordlist for the XOR Cracker
+    let ctx = meta.filter(m => m.ifd !== 'XMP').map(m => m.val).join('\n');
+    runs.forEach(r => ctx = ctx.split(r.v).join(' '));
+    const xorLink = r => `../xor-cracker/?fmt=${r.fmt}&q=${encodeURIComponent(r.v)}&keys=${encodeURIComponent(ctx.slice(0, 4000))}`;
+    html += `<section class="panel"><h2>Metadata <span class="muted" style="font-weight:400">(EXIF / GPS / XMP)</span></h2>
+      ${runs.length ? `<p style="margin:0 0 8px"><span class="b b-warn">${runs.length} possible ciphertext</span></p>` : ''}
+      <div class="tablewrap"><table><thead><tr><th>IFD</th><th>Tag</th><th>Value</th></tr></thead><tbody>
+      ${meta.map(m => `<tr><td class="muted">${esc(m.ifd)}</td><td class="mono" style="white-space:nowrap">${esc(m.name)}</td><td class="mono" style="font-size:12px;word-break:break-all">${hlFlags(m.val)}${m.map ? ` <a href="${esc(m.map)}" target="_blank" rel="noopener">map ↗</a>` : ''}
+        ${encodedRuns(m.val).map(r => `<div style="margin-top:4px"><span class="b b-info">${r.fmt} · ${r.fmt === 'hex' ? r.v.length / 2 : Math.floor(r.v.replace(/=+$/, '').length * 3 / 4)} bytes</span> <a class="btn" style="padding:2px 8px;font-size:12px" href="${xorLink(r)}">XOR Cracker →</a> <a class="btn" style="padding:2px 8px;font-size:12px" href="../recursive-decoder/?q=${encodeURIComponent(r.v)}">Recursive Decoder →</a></div>`).join('')}</td></tr>`).join('')}
+      </tbody></table></div></section>`;
+  }
+
   // strings + hex
-  html += `<section class="panel"><h2>Strings</h2><div class="row" style="margin-top:0"><label class="small" style="margin:0">Min length</label><input type="number" id="smin" value="6" min="3" max="50" style="width:70px">
+  html +=`<section class="panel"><h2>Strings</h2><div class="row" style="margin-top:0"><label class="small" style="margin:0">Min length</label><input type="number" id="smin" value="6" min="3" max="50" style="width:70px">
       <label class="chk"><input type="checkbox" id="s16"> UTF-16LE</label><input type="search" id="sq" class="grow" placeholder="Filter strings…"><button id="scp">Copy</button></div>
       <pre id="sout" style="margin-top:8px;max-height:360px"></pre></section>
     <section class="panel"><h2>Hex view</h2><div class="row" style="margin-top:0"><label class="small" style="margin:0">Offset</label><input type="text" id="hoff" class="mono" value="0" style="width:120px"><button id="hprev">◀</button><button id="hnext">▶</button><span class="muted">1 KiB per page · decimal or 0x hex</span></div>

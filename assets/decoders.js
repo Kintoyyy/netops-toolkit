@@ -1,4 +1,4 @@
-/* Shared decoding helpers: byte parsing, encodings, scoring, flag detection */
+/* Shared decoding helpers: byte parsing, encodings, scoring, pattern highlighting */
 const te = new TextEncoder();
 const tdLatin = new TextDecoder('latin1');
 const tdUtf8 = new TextDecoder('utf-8', { fatal: false });
@@ -66,8 +66,7 @@ function englishScore(s){
   }
   return sc / s.length + (letters > 1 ? 25 * bg / letters : 0) + flagBonus(s);
 }
-const FLAG_WORDS = /^(flag|ctf|key|pico|htb|thm|cyber|sec|kctf|duc|uiuctf|csaw)/i;
-function flagBonus(s){ const f = findFlags(s); if (!f.length) return 0; return FLAG_WORDS.test(f[0]) ? 60 : 30; }
+function flagBonus(s){ return findFlags(s).length ? 30 : 0; }
 function bytesScore(b){ return englishScore(asLatin(b)); }
 // unigram-only score, for scoring non-contiguous columns (e.g. repeating-key XOR)
 function charScore(b){ let sc = 0; for (const x of b) { const l = String.fromCharCode(x).toLowerCase(); sc += EN_FREQ[l] != null ? EN_FREQ[l] : (x >= 32 && x < 127) ? .3 : (x === 10 || x === 13 || x === 9) ? .5 : -15; } return b.length ? sc / b.length : -99; }
@@ -111,10 +110,10 @@ async function inflate(bytes, fmt){
   return new Uint8Array(await out.arrayBuffer());
 }
 
-/* ---------- flag-format setting widget (any element with id="flagre") ---------- */
+/* ---------- highlight-pattern setting widget (any element with id="flagre") ---------- */
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('flagre'); if (!el) return;
   el.value = flagRegex().source;
   el.addEventListener('change', () => { try { new RegExp(el.value); setFlagRegex(el.value); el.style.borderColor = ''; el.dispatchEvent(new Event('flagchange', { bubbles: true })); } catch { el.style.borderColor = 'var(--bad)'; } });
 });
-const FLAG_BOX = `<label class="small" style="margin:0">Flag regex</label><input type="text" id="flagre" class="mono" style="width:280px" title="Saved in this browser">`;
+const FLAG_BOX = `<label class="small" style="margin:0">Highlight regex</label><input type="text" id="flagre" class="mono" style="width:280px" title="Saved in this browser">`;

@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Image Steganography · NetOps Toolkit</title>
-<meta name="description" content="StegSolve-style bit-plane and channel viewer, pixel inspector, configurable LSB data extraction and an automatic LSB scan for hidden text and flags. Fully offline.">
+<meta name="description" content="StegSolve-style bit-plane and channel viewer, pixel inspector, configurable LSB data extraction and an automatic LSB scan for hidden text. Fully offline.">
 <link rel="stylesheet" href="../../assets/style.css">
 </head>
 <body>
 <div class="wrap">
   <a class="back" href="../../">← All tools</a>
   <header class="top">
-    <div><h1>Image Steganography</h1><p class="sub">StegSolve-style bit-plane and channel viewer, pixel inspector, configurable LSB data extraction and an automatic LSB scan for hidden text and flags. Fully offline.</p></div>
+    <div><h1>Image Steganography</h1><p class="sub">StegSolve-style bit-plane and channel viewer, pixel inspector, configurable LSB data extraction and an automatic LSB scan for hidden text. Fully offline.</p></div>
     <button id="themeBtn" title="Toggle theme"></button>
   </header>
 <script src="../../assets/common.js"></script>
@@ -118,7 +118,7 @@ function extractBits(sel, order, bitord, chord, maxBytes = Infinity){
 function selected(){ return new Set($$('#bitgrid input:checked').map(x => x.dataset.c + ':' + x.dataset.b)); }
 function preview(bytes){
   const head = bytes.subarray(0, 4096), txt = asLatin(head), flags = findFlags(asLatin(bytes.subarray(0, 200000)));
-  return (flags.length ? `FLAG: ${flags.join('  ')}\n\n` : '') + `Text (printable ${(printableRatio(head) * 100).toFixed(0)}%):\n${safeText(head, 600)}\n\nHex:\n${hexdump(bytes, 0, 256)}`;
+  return (flags.length ? `MATCH: ${flags.join('  ')}\n\n` : '') + `Text (printable ${(printableRatio(head) * 100).toFixed(0)}%):\n${safeText(head, 600)}\n\nHex:\n${hexdump(bytes, 0, 256)}`;
 }
 $('#extract').onclick = () => {
   extracted = extractBits(selected(), $('#order').value, $('#bitord').value, $('#chord').value);
@@ -144,9 +144,9 @@ $('#auto').onclick = async () => {
   const top = res.slice(0, 8);
   $('#autoOut').innerHTML = `<div class="tablewrap" style="margin-top:12px"><table><thead><tr><th>Bits</th><th>Order</th><th>Preview</th><th></th></tr></thead><tbody>
     ${top.map((r, i) => `<tr><td class="mono">${r.cb.join(' ')}${r.cb.length > 1 ? ` <span class="muted">(${r.chord})</span>` : ''}</td><td>${r.order}, ${r.bitord}</td>
-      <td class="mono" style="font-size:12px;white-space:pre-wrap">${r.flags.length ? '<span class="b b-ok">flag</span> ' : ''}${r.sig ? `<span class="b b-info">${esc(r.sig)}</span> ` : ''}${hlFlags(safeText(r.bytes.subarray(0, 160), 160))}</td>
+      <td class="mono" style="font-size:12px;white-space:pre-wrap">${r.flags.length ? '<span class="b b-ok">match</span> ' : ''}${r.sig ? `<span class="b b-info">${esc(r.sig)}</span> ` : ''}${hlFlags(safeText(r.bytes.subarray(0, 160), 160))}</td>
       <td><button data-use="${i}" style="padding:2px 8px;font-size:12px">Use</button></td></tr>`).join('')}</tbody></table></div>
-    <p class="note">Ranked by flag match, known file header, then readable text. Nothing obvious? Check the bit planes visually — data may be hidden as an image.</p>`;
+    <p class="note">Ranked by pattern match, known file header, then readable text. Nothing obvious? Check the bit planes visually — data may be hidden as an image.</p>`;
   $$('[data-use]').forEach(b => b.onclick = () => { const r = top[b.dataset.use]; $$('#bitgrid input').forEach(x => x.checked = r.cb.some(c => CH.indexOf(c[0]) == x.dataset.c && c[1] == x.dataset.b));
     $('#order').value = r.order; $('#bitord').value = r.bitord; $('#chord').value = r.chord; $('#extract').click(); });
 };

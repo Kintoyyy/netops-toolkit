@@ -1,4 +1,21 @@
-<!-- title: CTF Magic Decoder | desc: Paste an encoded blob — it recursively tries Base64/32/58/85, hex, binary, octal, decimal, URL, HTML, Morse, ROT13/47, Atbash, reverse, gzip/zlib and hunts for the flag. | js: decoders -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recursive Decoder · NetOps Toolkit</title>
+<meta name="description" content="Paste an encoded blob — it recursively tries Base64/32/58/85, hex, binary, octal, decimal, URL, HTML, Morse, ROT13/47, Atbash, reverse, gzip/zlib and ranks the most readable results.">
+<link rel="stylesheet" href="../../assets/style.css">
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="../../">← All tools</a>
+  <header class="top">
+    <div><h1>Recursive Decoder</h1><p class="sub">Paste an encoded blob — it recursively tries Base64/32/58/85, hex, binary, octal, decimal, URL, HTML, Morse, ROT13/47, Atbash, reverse, gzip/zlib and ranks the most readable results.</p></div>
+    <button id="themeBtn" title="Toggle theme"></button>
+  </header>
+<script src="../../assets/common.js"></script>
+<script src="../../assets/decoders.js"></script>
 <section class="panel">
   <label class="small" for="in">Ciphertext / encoded data</label>
   <textarea id="in" spellcheck="false" style="min-height:140px" placeholder="Vm0wd2QyUXlVWGxWV0d4V1YwZDRWMVl3WkRSV01WbDNXa1JTVjAxV2JETlhhMUpUVmpBeFYySkVUbGhoTVVwVVZtcEJlRll5U2tWVQ=="></textarea>
@@ -7,7 +24,7 @@
     <label class="small" style="margin:0">Max depth</label><select id="depth"><option>4</option><option selected>6</option><option>8</option><option>10</option></select>
     <label class="chk"><input type="checkbox" id="optCheap" checked> Try ROT13 / ROT47 / Atbash / reverse between steps</label>
     <span style="flex:1"></span>
-    <label class="small" style="margin:0">Flag regex</label><input type="text" id="flagre" class="mono" style="width:260px" title="Saved in this browser">
+    <label class="small" style="margin:0">Highlight regex</label><input type="text" id="flagre" class="mono" style="width:260px" title="Saved in this browser">
   </div>
 </section>
 <div id="out"></div>
@@ -73,7 +90,7 @@ async function solve(input, maxDepth, cheap){
     frontier = next.sort((a, b) => bytesScore(b.bytes) - bytesScore(a.bytes)).slice(0, 60);
   }
     const cheapN = r => r.path.filter(x => CHEAP.some(c => c[0] === x)).length;
-  const flagQ = r => !r.flags.length ? 0 : (r.text ? 2 : 0) + (FLAG_WORDS.test(r.flags[0]) ? 2 : 1);
+  const flagQ = r => !r.flags.length ? 0 : (r.text ? 2 : 0) + 1;
   results.sort((a, b) => (flagQ(b) - flagQ(a)) || (cheapN(a) - cheapN(b)) || (b.score - a.score) || (a.path.length - b.path.length));
   return { results, explored };
 }
@@ -88,11 +105,11 @@ async function run(){
   const withFlags = results.filter(r => r.flags.length);
   const top = results.slice(0, 25);
   $('#out').innerHTML = `<section class="panel">
-    <div class="row" style="margin-top:0">${withFlags.length ? `<span class="b b-ok">Flag found</span> <b class="mono">${esc(withFlags[0].flags[0])}</b> <button id="cpFlag">Copy</button>` : '<span class="b b-mute">No flag pattern matched</span> <span class="muted">— showing the most readable results</span>'}
+    <div class="row" style="margin-top:0">${withFlags.length ? `<span class="b b-ok">Match found</span> <b class="mono">${esc(withFlags[0].flags[0])}</b> <button id="cpFlag">Copy</button>` : '<span class="b b-mute">No pattern match</span> <span class="muted">— showing the most readable results</span>'}
       <span style="flex:1"></span><span class="muted">${results.length} candidates · ${explored} attempts · ${ms} ms</span></div>
     <div class="tablewrap" style="margin-top:12px"><table><thead><tr><th style="width:34%">Recipe</th><th>Output</th></tr></thead><tbody>
     ${top.map((r, i) => `<tr><td>${r.path.map(p => `<span class="b ${CHEAP.some(c => c[0] === p) ? 'b-mute' : 'b-info'}">${esc(p)}</span>`).join(' → ')}
-        ${r.flags.length ? ' <span class="b b-ok">flag</span>' : ''}<div class="muted" style="font-size:11px;margin-top:3px">${r.bytes.length} bytes · ${r.text ? 'text' : 'binary'}</div></td>
+        ${r.flags.length ? ' <span class="b b-ok">match</span>' : ''}<div class="muted" style="font-size:11px;margin-top:3px">${r.bytes.length} bytes · ${r.text ? 'text' : 'binary'}</div></td>
       <td class="mono" style="font-size:12px;white-space:pre-wrap">${r.text ? hlFlags(asText(r.bytes).slice(0, 600)) : esc(hexdump(r.bytes, 0, 64))}
         <div class="row" style="margin-top:4px"><button data-cp="${i}" style="padding:2px 8px;font-size:12px">Copy</button><button data-dl="${i}" style="padding:2px 8px;font-size:12px">Download</button><button data-use="${i}" style="padding:2px 8px;font-size:12px">Use as input</button></div></td></tr>`).join('') || '<tr><td colspan="2" class="muted">Nothing decoded. The input may be encrypted (try the XOR or Cipher tools) rather than encoded.</td></tr>'}
     </tbody></table></div></section>`;
@@ -104,4 +121,9 @@ async function run(){
 $('#go').onclick = run;
 $('#in').addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') run(); });
 document.addEventListener('flagchange', () => $('#in').value && run());
+if (getParam('q')) { $('#in').value = getParam('q'); run(); }
 </script>
+
+</div>
+</body>
+</html>

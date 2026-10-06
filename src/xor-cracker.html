@@ -1,4 +1,4 @@
-<!-- title: XOR Cracker | desc: XOR with any key, brute-force single-byte keys, recover repeating keys by Hamming distance, and derive the key from known plaintext like “flag{”. | js: decoders -->
+<!-- title: XOR Cracker | desc: XOR with any key, brute-force single-byte keys, recover repeating keys by Hamming distance, derive the key from known plaintext (completing keys longer than the crib), and try every word of any context text as a key. | js: decoders -->
 <section class="panel">
   <div class="row" style="margin-top:0">
     <label class="small" style="margin:0">Ciphertext format</label>
@@ -6,7 +6,7 @@
     <label class="btn" for="file">Load file…</label><input type="file" id="file">
     <span class="muted" id="info"></span>
     <span style="flex:1"></span>
-    <label class="small" style="margin:0">Flag regex</label><input type="text" id="flagre" class="mono" style="width:240px">
+    <label class="small" style="margin:0">Highlight regex</label><input type="text" id="flagre" class="mono" style="width:240px">
   </div>
   <textarea id="in" spellcheck="false" style="min-height:120px;margin-top:8px" placeholder="1b37373331363f78151b7f2b783431333d78397828372d363c78373e783a393b3736"></textarea>
 </section>
@@ -20,17 +20,19 @@
       <button class="primary" id="apply">Apply</button>
     </div>
     <div class="row" style="margin-top:14px">
-      <input type="text" id="known" class="grow mono" placeholder="Known plaintext, e.g. flag{  or  CTF{" value="flag{">
+      <input type="text" id="known" class="grow mono" placeholder="Known plaintext, e.g. %PDF-  or  <?xml" title="Remembered in this browser">
       <button id="kp">Derive key</button>
-    </div>
-    <p class="note">Known-plaintext tries every offset and shows key fragments that look like readable text or repeat.</p>
-  </section>
+    </div>  </section>
   <section class="panel">
     <h2>Automatic attacks</h2>
     <div class="row" style="margin-top:0"><button class="primary" id="single">Single-byte brute force</button><button id="multi">Repeating-key crack</button></div>
     <p class="note">Single-byte tries all 256 keys. Repeating-key estimates the key length with normalized Hamming distance (2–40), then solves each column as single-byte XOR. Needs a few dozen bytes per key byte.</p>
   </section>
 </div>
+<section class="panel">
+  <h2>Keys from context</h2>
+  <textarea id="ctx" spellcheck="false" style="min-height:90px" placeholder="Paste anything that might hide the key — descriptions, notes, EXIF fields, file names, strings output…&#10;Every line, word and word pair is tried as a repeating key (as-is, lower, UPPER and Title case)."></textarea>
+  <div class="row"><button class="primary" id="dict">Try as keys</button><label class="chk"><input type="checkbox" id="common" checked> Also try common keys</label><span class="muted" id="dictInfo"></span></div></section>
 <div id="out"></div>
 
 <script>
@@ -57,6 +59,69 @@ function singleByte(d, scorer = bytesScore){
   const r = []; for (let k = 0; k < 256; k++) { const o = d.map(b => b ^ k); r.push({ k, o, s: scorer(o) }); }
   return r.sort((a, b) => b.s - a.s);
 }
+const useBtn = k => `<button data-k="${toHex(k)}" style="padding:2px 8px;font-size:12px">Use</button>`;
+const wireUse = () => $$('[data-k]').forEach(b => b.onclick = () => { $('#kfmt').value = 'hex'; $('#key').value = b.dataset.k; $('#apply').click(); });
+
+// Leet-aware English score for short identifier-like text: "_" is a word gap, 0/1/3/4/5/7 read as letters, ranked bigrams.
+const BIGRAM_RANK = 'th he in er an re on at en nd ti es or te of ed is it al ar st to nt ng se ha as ou io le ve co me de hi ri ro ic ne ea ra ce li ch ll be ma si om ur ca el ta la ns di fo ho pe ec pr no ct us ac ot il tr ly nc et ut ss so rs un lo wa ge ie wh ee wi em ad ol rt po we na ul ni ts mo ow pa im mi ai sh ir su id os iv ia am fi ci vi pl ig tu ev ld ry mp fe bl ab gh ty op wo sa ay ex ke fr oo av ag if ap gr od bo sp rd do uc bu ei ov by rm ep tt oc fa ef cu rn sc gi da yo cr cl du ga qu ue ff ba ey ls va um pp ua up lu go ht ru ug ds lt pi rc rr eg au ck ew mu br bi pt ak pu ui rg ib tl ny ki rk ys ob mm fu ph og ms ye ud mb ip ub oi rl gu dr hr cc tw ft wn nu af hu nn eo vo rv nf xp gn sm fl iz ok nl my gl aw ju oa eq sy sl ps jo lf nv je nk kn gs dy hy ze ks xt bs ik dd cy rp sk xi oe oy ws lv dl rf eu dg wr xa yi nm eb rb tm xc eh tc gy ja hn yp za gg ym sw'.split(' ');
+const BIGRAM_W = new Map(BIGRAM_RANK.map((b, i) => [b, i < 50 ? 3 : i < 100 ? 2 : i < 160 ? 1 : 0.5]));
+const LEET = { 0: 'o', 1: 'i', 3: 'e', 4: 'a', 5: 's', 7: 't', '@': 'a', $: 's', _: ' ', '-': ' ' };
+function flagTextScore(t){
+  const s = t.toLowerCase().replace(/[013457@$_\-]/g, c => LEET[c]); let sc = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i], p = s[i - 1];
+    sc += c >= 'a' && c <= 'z' ? EN_FREQ[c] / 4 : c === ' ' ? 1 : /[0-9{}!?]/.test(c) ? 0 : -3;
+    if (p >= 'a' && p <= 'z' && c >= 'a' && c <= 'z') sc += BIGRAM_W.get(p + c) ?? -2;
+  }
+  return sc;
+}
+
+// crib sits at offset 0 but the key is longer: brute-force the (≤ 2) key bytes the crib doesn't cover.
+// With only a handful of bytes per key position this is a ranking, not proof — the previews decide.
+function completeKey(d, crib){
+  const n = crib.length, sample = d.subarray(0, 2048), out = [];
+  const last = d.length - 1, tail = crib[n - 1] === 0x7b ? 0x7d ^ d[last] : null;   // "...{" prefix ⇒ data probably ends in "}"
+  for (let L = n + 1; L <= Math.min(n + 8, 64, d.length); L++) {
+    const known = new Int16Array(L).fill(-1);
+    for (let i = 0; i < n; i++) known[i] = crib[i] ^ d[i];
+    if (tail != null && known[last % L] < 0) known[last % L] = tail;
+    const unk = [...known.keys()].filter(i => known[i] < 0);
+    if (unk.length > 2) continue;
+    const range = unk.length === 2 ? 95 : 256, base = unk.length === 2 ? 32 : 0, total = unk.length ? range ** unk.length : 1;
+    const k = Uint8Array.from(known, v => Math.max(v, 0)), top = [];
+    // keys are usually words: reward guessed bytes in the same character class as the crib-derived ones
+    const cls = x => x >= 65 && x <= 90 ? 'A' : x >= 97 && x <= 122 ? 'a' : x >= 48 && x <= 57 ? '0' : x >= 32 && x < 127 ? '.' : '-';
+    const knownCls = new Set([...known].filter(v => v >= 0).map(cls));
+    for (let c = 0; c < total; c++) {
+      if (unk.length) k[unk[0]] = base + c % range;
+      if (unk.length > 1) k[unk[1]] = base + Math.floor(c / range);
+      const o = xorBytes(sample, k);
+      if (printableRatio(o) < 1) continue;
+      const s = flagTextScore(asLatin(o)) / Math.sqrt(o.length) + 2 * unk.filter(i => knownCls.has(cls(k[i]))).length + flagTextScore(asLatin(k)) / 4;
+      top.push({ L, k: k.slice(), s, unk: unk.length });
+    }
+    out.push(...top.sort((a, b) => b.s - a.s).slice(0, 3));
+  }
+  return out.sort((a, b) => b.s - a.s).slice(0, 6);
+}
+
+const COMMON_KEYS = ['key', 'secret', 'password', 'pass', 'xor', 'admin', 'root', 'crypto', 'cipher', 'letmein', 'qwerty', '1234', '12345', '123456', 'love', 'test', 'super'];
+function keyCandidates(text, common){
+  const set = new Set();
+  const add = w => { if (!w || w.length < 2 || w.length > 64) return; set.add(w); set.add(w.toLowerCase()); set.add(w.toUpperCase()); set.add(w[0].toUpperCase() + w.slice(1).toLowerCase()); };
+  for (const line of text.split(/\r?\n/)) {
+    const l = line.trim(); if (!l) continue;
+    add(l);
+    const words = l.split(/[^A-Za-z0-9]+/).filter(Boolean);
+    l.split(/\s+/).forEach(add); words.forEach(add);
+    for (let i = 0; i + 1 < words.length; i++) { add(words[i] + words[i + 1]); add(words[i] + '_' + words[i + 1]); }
+  }
+  if (common) COMMON_KEYS.forEach(add);
+  const keys = [...set].map(s => ({ k: te.encode(s) }));
+  for (const s of set) if (/^(?:[0-9a-f]{2}){2,32}$/i.test(s)) keys.push({ k: hexToBytes(s) });   // hex-looking words as raw key bytes too
+  return keys;
+}
+
 const hamming = (a, b) => { let n = 0; for (let i = 0; i < a.length; i++) { let x = a[i] ^ b[i]; while (x) { n += x & 1; x >>= 1; } } return n; };
 
 $('#apply').onclick = () => { try {
@@ -96,6 +161,7 @@ $('#multi').onclick = () => { try {
 
 $('#kp').onclick = () => { try {
   const d = getData(), p = te.encode($('#known').value); if (!p.length) throw new Error('Enter known plaintext');
+  try { localStorage.setItem('xorcrib', $('#known').value); } catch {}
   const rows = [];
   for (let off = 0; off + p.length <= d.length && off < 4096; off++) {
     const frag = p.map((b, i) => b ^ d[off + i]);
@@ -105,16 +171,34 @@ $('#kp').onclick = () => { try {
     if (off === 0 || pr === 1 || period) rows.push({ off, frag, pr, period });
   }
   rows.sort((a, b) => (b.off === 0) - (a.off === 0) || (b.period > 0) - (a.period > 0) || b.pr - a.pr);
-  show('Key fragments from known plaintext', rows.slice(0, 20).map(r => {
+  const done = rows.some(r => r.off === 0 && r.period) ? [] : completeKey(d, p);
+  show('Key fragments from known plaintext', done.map((c, i) => `<tr><td style="white-space:nowrap">key length ${c.L} <span class="b ${i ? 'b-info' : 'b-ok'}">${i ? 'candidate' : 'best guess'}</span><div class="muted" style="font-size:11px">${c.unk ? `${c.unk} byte${c.unk > 1 ? 's' : ''} brute-forced` : 'from crib + closing }'}</div></td>
+    <td>full key ${fmtKey(c.k)} ${useBtn(c.k)}${findFlags(asLatin(xorBytes(d, c.k))).length ? ' <span class="b b-ok">match</span>' : ''}<div class="mono" style="font-size:12px;margin-top:4px;white-space:pre-wrap">${hlFlags(safeText(xorBytes(d, c.k), 300))}</div></td></tr>`).concat(rows.slice(0, 20).map(r => {
     const key = r.period ? r.frag.slice(0, r.period) : r.frag;
     const rot = r.period ? new Uint8Array(key.length).map((_, i) => key[((i - r.off) % key.length + key.length) % key.length]) : null;
     const preview = rot ? xorBytes(d, rot) : null;
-    return `<tr><td style="white-space:nowrap">offset ${r.off}${r.period ? ` <span class="b b-ok">repeats every ${r.period}</span>` : ''}</td><td>${fmtKey(r.frag)}${rot ? `<div style="margin-top:4px">full key ${fmtKey(rot)} <button data-k="${toHex(rot)}" style="padding:2px 8px;font-size:12px">Use</button></div><div class="mono" style="font-size:12px;margin-top:4px;white-space:pre-wrap">${hlFlags(safeText(preview, 300))}</div>` : ''}</td></tr>`;
-  }), '<p class="note" style="margin-top:0">If the key is shorter than your known text, it shows up as a repeating pattern — click “Use” to apply it.</p>');
-  $$('[data-k]').forEach(b => b.onclick = () => { $('#kfmt').value = 'hex'; $('#key').value = b.dataset.k; $('#apply').click(); });
+    return `<tr><td style="white-space:nowrap">offset ${r.off}${r.period ? ` <span class="b b-ok">repeats every ${r.period}</span>` : ''}</td><td>${fmtKey(r.frag)}${rot ? `<div style="margin-top:4px">full key ${fmtKey(rot)} ${useBtn(rot)}</div><div class="mono" style="font-size:12px;margin-top:4px;white-space:pre-wrap">${hlFlags(safeText(preview, 300))}</div>` : ''}</td></tr>`;
+  })), '<p class="note" style="margin-top:0">If the key is shorter than your known text, it shows up as a repeating pattern; if it is slightly longer, the missing bytes are brute-forced and ranked — with few bytes per key position the top guess can be off by a letter, so read the previews. Click “Use” to apply a key.</p>');
+  wireUse();
+} catch (e) { fail(e); } };
+
+$('#dict').onclick = () => { try {
+  const d = getData(), sample = d.subarray(0, 4096);
+  const keys = keyCandidates($('#ctx').value, $('#common').checked);
+  if (!keys.length) throw new Error('Paste some context text first');
+  const best = keys.map(c => ({ ...c, s: bytesScore(xorBytes(sample, c.k)) })).sort((a, b) => b.s - a.s)
+    .filter((c, i, a) => a.findIndex(x => toHex(x.k) === toHex(c.k)) === i).slice(0, 10);
+  $('#dictInfo').textContent = `${keys.length} candidate keys tried`;
+  show(`Keys from context — best of ${keys.length}`, best.map((c, i) => resultRow(`key ${fmtKey(c.k)} ${useBtn(c.k)}${i === 0 ? ' <span class="b b-ok">best</span>' : ''}`, xorBytes(d, c.k))));
+  wireUse();
 } catch (e) { fail(e); } };
 
 $('#file').onchange = async e => { const f = e.target.files[0]; if (!f) return; data = new Uint8Array(await f.arrayBuffer()); fileName = f.name; $('#in').value = `[file loaded: ${f.name}] — clear this box to type input instead`; $('#in').disabled = true; updateInfo(); e.target.value = '';
   $('#in').insertAdjacentHTML('afterend', '<button id="unload" style="margin-top:6px">Unload file</button>'); $('#unload').onclick = () => { data = fileName = null; $('#in').disabled = false; $('#in').value = ''; $('#unload').remove(); updateInfo(); }; };
 $('#in').addEventListener('input', updateInfo); $('#fmt').addEventListener('change', updateInfo);
+try { const c = localStorage.getItem('xorcrib'); if (c) $('#known').value = c; } catch {}
+// deep links, e.g. from File Analyzer: ?q=<ciphertext>&fmt=hex&keys=<context text>
+if (getParam('q')) { if (['hex', 'base64', 'text', 'dec', 'bin'].includes(getParam('fmt'))) $('#fmt').value = getParam('fmt'); $('#in').value = getParam('q'); updateInfo(); }
+if (getParam('keys')) $('#ctx').value = getParam('keys');
+if (getParam('q') && getParam('keys')) $('#dict').click();
 </script>
