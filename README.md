@@ -12,6 +12,7 @@ A browser-based toolbox for ISP operators, network engineers, DNS admins and sec
 | Email Security Check | online | MX, SPF lookup count, DMARC, DKIM, MTA-STS, TLS-RPT, BIMI |
 | Email Header Analyzer | offline | Hop trace, delays, auth verdicts, phishing flags |
 | IOC Extractor & Defanger | offline | IPs, domains, URLs, hashes, CVEs, ATT&CK IDs |
+| My IP & Connection | online | Public IPv4/IPv6, ISP/ASN, DNS resolver, latency, speed test, Path MTU tools, WebRTC leak check |
 | Subnet Calculator | offline | IPv4/IPv6 math, VLSM planner, aggregation, subtraction, overlap finder, cheat sheet |
 | Subnet Visualizer | offline | Split/join address plans with notes, colors, block map and shareable links |
 | BGP Toolkit | online | ASN/prefix lookup, RPKI, looking-glass AS paths and path / neighbour graphs (RIPEstat), prefix lists, communities, AS-path regex |
@@ -26,7 +27,7 @@ A browser-based toolbox for ISP operators, network engineers, DNS admins and sec
 | Image Steganography | offline | Bit planes, channel views, LSB extraction and auto-scan |
 | RSA Toolkit | offline | d / decrypt, factoring (Fermat, Pollard rho, multi-prime), small-e and Wiener attacks |
 
-**Offline** tools never send data anywhere. **Online** tools call public APIs (Cloudflare/Google DoH, rdap.org, RIPEstat, crt.sh, CertSpotter, ipwho.is, maclookup.app) directly from the visitor's browser.
+**Offline** tools never send data anywhere. **Online** tools call public APIs (Cloudflare/Google DoH, rdap.org, RIPEstat, ipify, Cloudflare speed test, crt.sh, CertSpotter, ipwho.is, maclookup.app) directly from the visitor's browser.
 
 ## Deploy
 Push this folder to a repo → Settings → Pages → Deploy from branch → `main` / root.

@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My IP &amp; Connection · NetOps Toolkit</title>
+<meta name="description" content="Your public IPv4 / IPv6, ISP and BGP origin, DNS resolver, HTTP / TLS details, latency, speed test, Path MTU tools and WebRTC leak check.">
+<link rel="stylesheet" href="../../assets/style.css">
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="../../">← All tools</a>
+  <header class="top">
+    <div><h1>My IP &amp; Connection</h1><p class="sub">Your public IPv4 / IPv6, ISP and BGP origin, DNS resolver, HTTP / TLS details, latency, speed test, Path MTU tools and WebRTC leak check.</p></div>
+    <button id="themeBtn" title="Toggle theme"></button>
+  </header>
+<script src="../../assets/common.js"></script>
+<style>
+.ip{font-size:24px;font-weight:700;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;word-break:break-all}
+.big{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin-top:4px}
+.bar{height:8px;border-radius:4px;background:var(--accent);opacity:.8}
+.gauge{font-size:30px;font-weight:700} .gauge small{font-size:14px;font-weight:400;color:var(--muted)}
+.mtu td input[type=number]{width:64px}
+/* speed-test charts: series colours validated (light on #fff, dark on #171b21) */
+.viz-root{--s1:#2a78d6;--s2:#eb6834}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .viz-root{--s1:#3987e5;--s2:#d95926}}
+:root[data-theme="dark"] .viz-root{--s1:#3987e5;--s2:#d95926}
+.chart{position:relative} .chart svg{display:block;width:100%;overflow:visible;touch-action:none}
+.lk{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);font-weight:400;margin-left:14px} .lk i{width:14px;height:2px;border-radius:1px;display:inline-block}
+.tip{position:absolute;pointer-events:none;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:12px;box-shadow:0 4px 14px rgba(0,0,0,.18);white-space:nowrap;z-index:2;color:var(--muted)}
+.tip b{font-size:14px;color:var(--text)} .tip .k{display:inline-block;width:12px;height:2px;border-radius:1px;vertical-align:middle;margin-right:6px}
+</style>
+<div class="tabs" id="tabs" style="margin-top:0"></div>
+
+<div class="pane" id="pane-ov">
+  <div class="big" id="ips"></div>
+  <div class="row"><button id="ovRe">Refresh</button><button id="ovCp">Copy summary</button><span class="muted" id="ovNote"></span></div>
+  <div class="grid2" style="margin-top:12px" id="ovCards"></div>
+  <p class="note">Looks up your address with ipify, location with ipwho.is, routing with RIPEstat, your DNS resolver with ip-api's EDNS test and connection details with Cloudflare's trace endpoint — straight from your browser.</p>
+</div>
+
+<div class="pane" id="pane-lat" hidden>
+  <div class="row" style="margin-top:0"><button class="primary" id="latGo">Run latency test</button>
+    <input type="text" id="latUrl" class="grow mono" placeholder="Add your own HTTPS URL to test (optional)" spellcheck="false"><label class="small" style="margin:0">Samples</label><select id="latN"><option>5</option><option selected>10</option><option>20</option></select></div>
+  <div id="latOut"></div>
+  <p class="note">HTTP round-trip time from your browser: one warm-up request opens the connection (DNS + TCP + TLS), then each sample is a single request on the open connection — close to network RTT plus a little server time. Real ICMP ping isn't possible from a web page.</p>
+</div>
+
+<div class="pane" id="pane-spd" hidden>
+  <div class="row" style="margin-top:0"><button class="primary" id="spdGo">Start speed test</button><span class="muted" id="spdState"></span></div>
+  <div class="big" id="spdOut" style="margin-top:12px"></div>
+  <div class="viz-root" id="spdViz" hidden>
+    <div class="card" style="margin-top:12px"><div class="t"><span>Throughput over time</span><span><span class="lk"><i style="background:var(--s1)"></i>Download</span><span class="lk"><i style="background:var(--s2)"></i>Upload</span></span></div><div class="chart" id="thrChart"></div></div>
+    <div class="card" style="margin-top:12px"><div class="t"><span>Latency samples <span class="muted" style="font-weight:400">(idle, ms)</span></span></div><div class="chart" id="latChart"></div></div>
+    <details style="margin-top:10px"><summary class="muted" style="cursor:pointer">Data table</summary><div id="spdTable" class="tablewrap" style="max-height:300px;overflow:auto;margin-top:6px"></div></details>
+  </div>
+  <p class="note">Uses Cloudflare's speed-test endpoints (speed.cloudflare.com) with 4 parallel streams, sized to your connection so each phase lasts a few seconds. Typically uses 20–150 MB of data. Results are to Cloudflare's nearest edge, not your ISP's network.</p>
+</div>
+
+<div class="pane" id="pane-mtu" hidden>
+  <div class="grid2">
+    <div>
+      <h2>MTU / MSS calculator</h2>
+      <div class="row" style="margin-top:0"><label class="small" style="margin:0">Physical / underlay MTU</label><input type="number" id="mBase" value="1500" min="576" max="9216" style="width:90px"></div>
+      <table class="mtu" style="margin-top:8px"><thead><tr><th>Encapsulation</th><th>Bytes</th><th>Count</th></tr></thead><tbody id="mRows"></tbody></table>
+    </div>
+    <div><h2>Result</h2><div id="mOut"></div></div>
+  </div>
+  <h2 style="margin-top:18px">Find the real path MTU</h2>
+  <p class="muted" style="margin:0 0 8px">Browsers can't set the Don't Fragment bit or send ICMP, so run this from your computer: it binary-searches the largest ping that gets through unfragmented.</p>
+  <div class="row" style="margin-top:0"><input type="text" id="mHost" class="mono" value="1.1.1.1" style="width:220px" spellcheck="false">
+    <select id="mOs"><option value="win">Windows (PowerShell)</option><option value="linux">Linux</option><option value="mac">macOS</option></select>
+    <select id="mFam"><option value="4">IPv4</option><option value="6">IPv6</option></select><button id="mCp">Copy</button></div>
+  <pre id="mScript" style="margin-top:8px"></pre>
+  <p class="note" id="mNote"></p>
+</div>
+
+<div class="pane" id="pane-br" hidden>
+  <div class="grid2"><div><h2>WebRTC / STUN</h2><div id="rtcOut"><span class="spin"></span> Gathering ICE candidates…</div></div><div><h2>Browser &amp; device</h2><div id="brOut"></div></div></div>
+</div>
+
+<script>
+const TABS = [['ov', 'My IP'], ['lat', 'Latency'], ['spd', 'Speed test'], ['mtu', 'Path MTU'], ['br', 'Browser & WebRTC']];
+$('#tabs').innerHTML = TABS.map(([k, n]) => `<button class="tab" data-t="${k}">${n}</button>`).join('');
+const ran = new Set();
+function tab(t){ TABS.forEach(([k]) => $('#pane-' + k).hidden = k !== t); $$('#tabs .tab').forEach(b => b.classList.toggle('on', b.dataset.t === t)); setParam('tab', t === 'ov' ? '' : t);
+  if (!ran.has(t)) { ran.add(t); ({ ov: overview, mtu: mtuCalc, br: browserInfo })[t]?.(); } }
+$('#tabs').onclick = e => { const b = e.target.closest('.tab'); if (b) tab(b.dataset.t); };
+const badge = (c, t) => `<span class="b b-${c}">${esc(t)}</span>`;
+const getJ = (u, ms = 8000) => fetch(u, { cache: 'no-store', signal: AbortSignal.timeout(ms) }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+const getT = (u, ms = 8000) => fetch(u, { cache: 'no-store', signal: AbortSignal.timeout(ms) }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); });
+async function firstOk(fns){ let err; for (const f of fns) { try { return await f(); } catch (e) { err = e; } } throw err; }
+const kv = rows => `<div class="kv">${rows.filter(r => r && r[1] != null && r[1] !== '').map(([k, v]) => `<div>${k}</div><div>${v}</div>`).join('')}</div>`;
+
+/* ---------- overview ---------- */
+let SUMMARY = [];
+async function ipDetails(ip){
+  const [geo, po, ptr] = await Promise.allSettled([
+    getJ('https://ipwho.is/' + ip),
+    getJ(`https://stat.ripe.net/data/prefix-overview/data.json?resource=${encodeURIComponent(ip)}&sourceapp=netops-toolkit`, 12000).then(j => j.data),
+    doh(ptrName(ip), 'PTR'),
+  ]);
+  const g = geo.status === 'fulfilled' && geo.value.success !== false ? geo.value : null, p = po.status === 'fulfilled' ? po.value : null;
+  const origin = p?.asns?.[0];
+  let rpki = null;
+  if (origin) try { rpki = (await getJ(`https://stat.ripe.net/data/rpki-validation/data.json?resource=AS${origin.asn}&prefix=${encodeURIComponent(p.resource)}&sourceapp=netops-toolkit`, 10000)).data.status; } catch {}
+  const ptrName_ = ptr.status === 'fulfilled' ? (ptr.value.Answer || []).filter(a => a.type === 12).map(a => a.data.replace(/\.$/, ''))[0] : null;
+  return { g, p, origin, rpki, ptr: ptrName_ };
+}
+function ipCard(label, ip, d){
+  if (!ip) return '';
+  const g = d.g, p = d.p, o = d.origin, conn = g?.connection || {};
+  const R = { valid: ['ok', 'RPKI valid'], invalid_asn: ['bad', 'RPKI invalid'], invalid_length: ['bad', 'RPKI invalid'], unknown: ['mute', 'no ROA'] }[d.rpki];
+  const flag = g?.flag?.emoji || '';
+  SUMMARY.push(`${label}: ${ip}${o ? ` (AS${o.asn} ${o.holder})` : ''}${g ? ` — ${[g.city, g.region, g.country].filter(Boolean).join(', ')}` : ''}`);
+  return `<div class="card"><div class="t"><span>${label}</span>${badge('info', ipKind(ip) === 6 ? 'IPv6' : 'IPv4')}</div>${kv([
+    ['Address', `${esc(ip)} <a href="../domain-intel/?q=${encodeURIComponent(ip)}">RDAP ↗</a>`],
+    ['Reverse DNS', d.ptr ? esc(d.ptr) : '<span class="muted">none</span>'],
+    ['Network', o ? `<a href="../bgp-toolkit/?q=AS${o.asn}">AS${o.asn}</a> ${esc(o.holder || '')}` : (conn.asn ? `AS${conn.asn} ${esc(conn.org || '')}` : '—')],
+    ['Announced as', p?.resource ? `<a href="../bgp-toolkit/?q=${encodeURIComponent(p.resource)}">${esc(p.resource)}</a> ${R ? badge(R[0], R[1]) : ''}` : null],
+    ['ISP', esc(conn.isp || conn.org || '')],
+    ['Location', g ? `${flag} ${esc([g.city, g.region, g.country].filter(Boolean).join(', '))} <span class="muted">(approximate)</span>` : null],
+    ['Time zone', g?.timezone?.id ? esc(g.timezone.id) + ' ' + esc(g.timezone.utc || '') : null],
+    ['Registry', p?.block?.desc ? esc(p.block.desc) : null],
+  ])}</div>`;
+}
+async function overview(){
+  SUMMARY = [];
+  $('#ips').innerHTML = ['IPv4', 'IPv6'].map(k => `<div class="card"><div class="muted">${k}</div><div class="ip" id="ip${k[3]}"><span class="spin"></span></div></div>`).join('');
+  $('#ovCards').innerHTML = '';
+  $('#ovNote').textContent = '';
+  const [v4, v6, pref, trace, dns] = await Promise.allSettled([
+    firstOk([() => getJ('https://api4.ipify.org?format=json').then(x => x.ip), () => getT('https://ipv4.icanhazip.com').then(s => s.trim())]),
+    firstOk([() => getJ('https://api6.ipify.org?format=json', 6000).then(x => x.ip), () => getT('https://ipv6.icanhazip.com', 6000).then(s => s.trim())]),
+    getJ('https://api64.ipify.org?format=json').then(x => x.ip),
+    getT('https://1.1.1.1/cdn-cgi/trace').then(t => Object.fromEntries(t.trim().split('\n').map(l => l.split('=')))),
+    getJ('https://edns.ip-api.com/json', 10000),
+  ]);
+  const ip4 = v4.status === 'fulfilled' && ipKind(v4.value) === 4 ? v4.value : null, ip6 = v6.status === 'fulfilled' && ipKind(v6.value) === 6 ? v6.value : null;
+  const show = (k, ip, none) => { $('#ip' + k).innerHTML = ip ? `${esc(ip)} <button data-copy="${esc(ip)}" style="font-size:12px;padding:2px 8px;vertical-align:middle">Copy</button>` : `<span class="muted" style="font-size:16px;font-weight:400">${none}</span>`; };
+  show(4, ip4, 'Not detected'); show(6, ip6, 'No IPv6 connectivity');
+  $$('[data-copy]').forEach(b => b.onclick = () => copyText(b.dataset.copy, b));
+  const prefV = pref.status === 'fulfilled' ? ipKind(pref.value) : 0;
+  $('#ovNote').innerHTML = ip4 && ip6 ? `Dual-stack — your browser prefers <b>IPv${prefV || '?'}</b>` : ip6 ? 'IPv6 only' : ip4 ? 'IPv4 only' : '';
+  const [d4, d6] = await Promise.all([ip4 && ipDetails(ip4), ip6 && ipDetails(ip6)]);
+  const tr = trace.status === 'fulfilled' ? trace.value : null, dn = dns.status === 'fulfilled' ? dns.value.dns : null;
+  const pq = tr?.kex && /mlkem|kyber/i.test(tr.kex);
+  if (dn) SUMMARY.push(`DNS resolver: ${dn.ip} (${dn.geo})`);
+  if (tr) SUMMARY.push(`Cloudflare edge: ${tr.colo}, ${tr.http}, ${tr.tls}`);
+  $('#ovCards').innerHTML = (d4 ? ipCard('Public IPv4', ip4, d4) : '') + (d6 ? ipCard('Public IPv6', ip6, d6) : '') +
+    `<div class="card"><div class="t">DNS resolver</div>${dn ? kv([['Resolver IP', `${esc(dn.ip)} <a href="../domain-intel/?q=${encodeURIComponent(dn.ip)}">RDAP ↗</a>`], ['Operator', esc(dn.geo)], ['Client subnet (ECS)', dns.value.edns?.ip ? esc(dns.value.edns.ip) : '<span class="muted">not sent</span>']]) +
+      '<p class="note">The resolver that actually queried an authoritative server for you. If your browser uses secure DNS (DoH), this is the DoH provider.</p>' : '<span class="muted">Could not detect (the test service may be blocked).</span>'}</div>
+    <div class="card"><div class="t">Connection to Cloudflare</div>${tr ? kv([['Nearest edge', `${esc(tr.colo)} <span class="muted">(airport code)</span>`], ['Country seen', esc(tr.loc)], ['HTTP version', esc(tr.http)], ['TLS', esc(tr.tls)],
+      ['Key exchange', `${esc(tr.kex || '—')} ${pq ? badge('ok', 'post-quantum') : ''}`], ['Cloudflare WARP', tr.warp === 'off' ? 'off' : badge('info', tr.warp)], ['Zero Trust gateway', tr.gateway === 'off' ? 'off' : badge('info', tr.gateway)]]) : '<span class="muted">Cloudflare trace unavailable.</span>'}</div>`;
+}
+$('#ovRe').onclick = overview;
+$('#ovCp').onclick = e => copyText(SUMMARY.join('\n'), e.target);
+
+/* ---------- latency ---------- */
+const TARGETS = [['Cloudflare', 'https://1.1.1.1/cdn-cgi/trace'], ['Google', 'https://www.google.com/generate_204'], ['Microsoft', 'https://www.bing.com/favicon.ico'], ['GitHub', 'https://github.com/favicon.ico'], ['RIPE NCC (Amsterdam)', 'https://stat.ripe.net/favicon.ico']];
+async function ping(url){ const u = url + (url.includes('?') ? '&' : '?') + '_=' + Math.random().toString(36).slice(2); const t0 = performance.now(); await fetch(u, { mode: 'no-cors', cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer', signal: AbortSignal.timeout(5000) }); return performance.now() - t0; }
+async function latency(){
+  const extra = $('#latUrl').value.trim(), list = [...TARGETS];
+  if (extra) { if (!/^https:\/\//i.test(extra)) { $('#latOut').innerHTML = '<div class="err">Custom URL must start with https://</div>'; return; } list.push(['Custom', extra]); }
+  const N = +$('#latN').value, res = list.map(([name, url]) => ({ name, url, s: [], first: null, err: null }));
+  $('#latGo').disabled = true;
+  const draw = () => { const meds = res.map(r => r.s.length ? [...r.s].sort((a, b) => a - b)[r.s.length >> 1] : 0), max = Math.max(1, ...meds);
+    $('#latOut').innerHTML = `<div class="tablewrap" style="margin-top:12px"><table><thead><tr><th>Target</th><th>First request</th><th>Min</th><th>Median</th><th>Max</th><th>Jitter</th><th style="width:30%"></th></tr></thead><tbody>${res.map((r, i) => {
+      const s = r.s, j = s.length > 1 ? s.slice(1).reduce((a, x, k) => a + Math.abs(x - s[k]), 0) / (s.length - 1) : null, f = x => x == null ? '—' : Math.round(x) + ' ms';
+      return `<tr><td><b>${esc(r.name)}</b><div class="muted mono" style="font-size:11px">${esc(new URL(r.url).host)}</div></td><td>${r.err ? badge('bad', 'failed') : f(r.first)}</td><td>${s.length ? f(Math.min(...s)) : '—'}</td><td><b>${meds[i] ? f(meds[i]) : '—'}</b></td><td>${s.length ? f(Math.max(...s)) : '—'}</td><td>${f(j)}</td><td>${meds[i] ? `<div class="bar" style="width:${Math.max(2, meds[i] / max * 100)}%"></div>` : ''}</td></tr>`; }).join('')}</tbody></table></div>`; };
+  draw();
+  await Promise.all(res.map(async r => { try { r.first = await ping(r.url); for (let i = 0; i < N; i++) { r.s.push(await ping(r.url)); draw(); } } catch (e) { r.err = e.message; draw(); } }));
+  $('#latGo').disabled = false;
+}
+$('#latGo').onclick = latency;
+
+/* ---------- speed test ---------- */
+const CF = 'https://speed.cloudflare.com';
+const mbps = bps => bps >= 1e9 ? (bps / 1e9).toFixed(2) + ' <small>Gbps</small>' : (bps / 1e6).toFixed(bps < 1e7 ? 2 : 1) + ' <small>Mbps</small>';
+const rateTxt = bps => bps >= 1e9 ? (bps / 1e9).toFixed(2) + ' Gbps' : (bps / 1e6).toFixed(bps < 1e7 ? 2 : 1) + ' Mbps';
+const PHASE = { down: ['Download', '--s1'], up: ['Upload', '--s2'] };
+let used = 0, T0 = 0, SAMPLES = [], LAT = [];
+const meter = { bytes: 0 };
+// throughput sampler: every 250 ms, rate over the last ~1 s of transferred bytes
+function sampler(ph, onv){
+  let last = performance.now(), lastB = meter.bytes; const win = [];
+  const id = setInterval(() => {
+    const now = performance.now(); win.push([meter.bytes - lastB, (now - last) / 1000]); if (win.length > 4) win.shift();
+    last = now; lastB = meter.bytes;
+    const v = win.reduce((a, w) => a + w[0], 0) * 8 / win.reduce((a, w) => a + w[1], 0);
+    SAMPLES.push({ t: (now - T0) / 1000, v, ph }); onv(v); drawThr();
+  }, 250);
+  return () => clearInterval(id);
+}
+async function down(bytes, streams){
+  const t0 = performance.now(); let got = 0;
+  await Promise.all(Array.from({ length: streams }, async () => { const r = await fetch(`${CF}/__down?bytes=${bytes}&_=${Math.random()}`, { cache: 'no-store' }); const rd = r.body.getReader();
+    for (;;) { const { done, value } = await rd.read(); if (done) break; got += value.length; used += value.length; meter.bytes += value.length; } }));
+  return got * 8 / ((performance.now() - t0) / 1000);
+}
+// XHR rather than fetch: only XHR reports upload progress, which the live graph needs
+function upOne(body){
+  return new Promise((res, rej) => {
+    const x = new XMLHttpRequest(); let prev = 0;
+    const add = n => { meter.bytes += n - prev; used += n - prev; prev = n; };
+    x.upload.onprogress = e => add(e.loaded);
+    x.onload = () => { add(body.length); x.status < 400 ? res() : rej(new Error('Upload HTTP ' + x.status)); };
+    x.onerror = () => rej(new Error('Upload failed'));
+    x.open('POST', `${CF}/__up?_=${Math.random()}`); x.send(body);
+  });
+}
+async function up(bytes, streams){
+  const body = new Uint8Array(bytes), t0 = performance.now();
+  await Promise.all(Array.from({ length: streams }, () => upOne(body)));
+  return bytes * streams * 8 / ((performance.now() - t0) / 1000);
+}
+
+/* ---- charts ---- */
+const SVGNS = 'http://www.w3.org/2000/svg';
+function niceMax(v){ const e = Math.pow(10, Math.floor(Math.log10(v))); for (const m of [1, 2, 2.5, 5, 10]) if (m * e >= v) return m * e; return 10 * e; }
+function niceStep(range, n){ const raw = range / n, e = Math.pow(10, Math.floor(Math.log10(raw))); for (const m of [1, 2, 5, 10]) if (m * e >= raw) return m * e; return 10 * e; }
+function tipAt(el, html, px, py){
+  let t = el.querySelector('.tip'); if (!t) { t = document.createElement('div'); t.className = 'tip'; el.appendChild(t); }
+  t.innerHTML = html; t.hidden = false;
+  const w = t.offsetWidth, W = el.clientWidth; t.style.left = (px + 14 + w > W ? px - 14 - w : px + 14) + 'px'; t.style.top = Math.max(0, py - 20) + 'px';
+}
+const tipRow = (cssVar, value, label) => `<div><span class="k" style="background:var(${cssVar})"></span><b>${esc(value)}</b> ${esc(label)}</div>`;
+function drawThr(){
+  const el = $('#thrChart'); if (!el || !SAMPLES.length) return;
+  const W = Math.max(320, el.clientWidth), H = 240, m = { l: 48, r: 18, t: 26, b: 28 };
+  const tMax = Math.max(4, SAMPLES.at(-1).t * 1.02), peak = Math.max(1e6, ...SAMPLES.map(p => p.v)) * 1.08, yStep = niceStep(peak, 4), vMax = Math.ceil(peak / yStep) * yStep;
+  const unit = vMax >= 2e9 ? 1e9 : 1e6, uName = unit === 1e9 ? 'Gbps' : 'Mbps';
+  const X = t => m.l + t / tMax * (W - m.l - m.r), Y = v => H - m.b - v / vMax * (H - m.t - m.b), f = n => n.toFixed(1);
+  const xStep = niceStep(tMax, 6);
+  let g = '';
+  for (let v = 0; v <= vMax + yStep / 2; v += yStep) g += `<line x1="${m.l}" x2="${W - m.r}" y1="${f(Y(v))}" y2="${f(Y(v))}" stroke="var(--border)" stroke-width="1"/><text x="${m.l - 8}" y="${f(Y(v) + 4)}" text-anchor="end" fill="var(--muted)" font-size="11">${+(v / unit).toFixed(v / unit < 10 && v ? 1 : 0)}</text>`;
+  for (let t = 0; t <= tMax; t += xStep) g += `<text x="${f(X(t))}" y="${H - 8}" text-anchor="middle" fill="var(--muted)" font-size="11">${t}s</text>`;
+  g += `<text x="${m.l - 8}" y="11" text-anchor="end" fill="var(--muted)" font-size="11">${uName}</text>`;
+  for (const ph of ['down', 'up']) {
+    const pts = SAMPLES.filter(p => p.ph === ph); if (!pts.length) continue;
+    const c = `var(${PHASE[ph][1]})`, line = pts.map((p, i) => `${i ? 'L' : 'M'}${f(X(p.t))},${f(Y(p.v))}`).join('');
+    g += `<path d="${line}L${f(X(pts.at(-1).t))},${f(Y(0))}L${f(X(pts[0].t))},${f(Y(0))}Z" fill="${c}" fill-opacity=".1"/>`;
+    g += `<path d="${line}" fill="none" stroke="${c}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    const e = pts.at(-1); g += `<circle cx="${f(X(e.t))}" cy="${f(Y(e.v))}" r="4" fill="${c}" stroke="var(--panel)" stroke-width="2"/>`;
+  }
+  g += `<line class="xh" y1="${m.t}" y2="${H - m.b}" stroke="var(--muted)" stroke-width="1" visibility="hidden"/><circle class="xd" r="4" stroke="var(--panel)" stroke-width="2" visibility="hidden"/>`;
+  g += `<rect class="hit" x="${m.l}" y="0" width="${W - m.l - m.r}" height="${H}" fill="transparent"/>`;
+  const d = SAMPLES.filter(p => p.ph === 'down'), u = SAMPLES.filter(p => p.ph === 'up');
+  el.innerHTML = `<svg xmlns="${SVGNS}" viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="Throughput over time. Download peak ${d.length ? rateTxt(Math.max(...d.map(p => p.v))) : 'n/a'}, upload peak ${u.length ? rateTxt(Math.max(...u.map(p => p.v))) : 'n/a'}." font-family="system-ui,sans-serif">${g}</svg>`;
+  const svg = el.querySelector('svg'), xh = svg.querySelector('.xh'), xd = svg.querySelector('.xd');
+  const move = ev => {
+    const r = svg.getBoundingClientRect(), px = (ev.clientX - r.left) * W / r.width, t = (px - m.l) / (W - m.l - m.r) * tMax;
+    const p = SAMPLES.reduce((b, s) => Math.abs(s.t - t) < Math.abs(b.t - t) ? s : b);
+    xh.setAttribute('x1', X(p.t)); xh.setAttribute('x2', X(p.t)); xh.setAttribute('visibility', 'visible');
+    xd.setAttribute('cx', X(p.t)); xd.setAttribute('cy', Y(p.v)); xd.setAttribute('fill', `var(${PHASE[p.ph][1]})`); xd.setAttribute('visibility', 'visible');
+    tipAt(el, tipRow(PHASE[p.ph][1], rateTxt(p.v), PHASE[p.ph][0]) + `<div>at ${p.t.toFixed(1)} s</div>`, X(p.t) * r.width / W, Y(p.v) * r.height / H);
+  };
+  const leave = () => { xh.setAttribute('visibility', 'hidden'); xd.setAttribute('visibility', 'hidden'); const t = el.querySelector('.tip'); if (t) t.hidden = true; };
+  svg.addEventListener('pointermove', move); svg.addEventListener('pointerleave', leave);
+}
+function drawLat(){
+  const el = $('#latChart'); if (!el || !LAT.length) return;
+  const W = Math.max(320, el.clientWidth), H = 120, m = { l: 48, r: 96, t: 12, b: 24 }, f = n => n.toFixed(1);
+  const vMax = niceMax(Math.max(...LAT) * 1.15), med = [...LAT].sort((a, b) => a - b)[LAT.length >> 1];
+  const X = i => m.l + (i + 0.5) / LAT.length * (W - m.l - m.r), Y = v => H - m.b - v / vMax * (H - m.t - m.b);
+  let g = '';
+  for (let v = 0; v <= vMax + 1e-9; v += vMax / 2) g += `<line x1="${m.l}" x2="${W - m.r}" y1="${f(Y(v))}" y2="${f(Y(v))}" stroke="var(--border)"/><text x="${m.l - 8}" y="${f(Y(v) + 4)}" text-anchor="end" fill="var(--muted)" font-size="11">${Math.round(v)}</text>`;
+  g += `<line x1="${m.l}" x2="${W - m.r}" y1="${f(Y(med))}" y2="${f(Y(med))}" stroke="var(--text)" stroke-opacity=".55" stroke-width="1"/><text x="${W - m.r + 8}" y="${f(Y(med) + 4)}" fill="var(--muted)" font-size="11">median ${Math.round(med)} ms</text>`;
+  g += `<path d="${LAT.map((v, i) => `${i ? 'L' : 'M'}${f(X(i))},${f(Y(v))}`).join('')}" fill="none" stroke="var(--muted)" stroke-opacity=".5" stroke-width="2" stroke-linejoin="round"/>`;
+  LAT.forEach((v, i) => { g += `<circle cx="${f(X(i))}" cy="${f(Y(v))}" r="4" fill="var(--muted)" stroke="var(--panel)" stroke-width="2"/><rect class="hd" data-i="${i}" x="${f(X(i) - 12)}" y="${f(Y(v) - 12)}" width="24" height="24" fill="transparent"/>`; });
+  for (let i = 0; i < LAT.length; i++) g += `<text x="${f(X(i))}" y="${H - 6}" text-anchor="middle" fill="var(--muted)" font-size="11">${i + 1}</text>`;
+  el.innerHTML = `<svg xmlns="${SVGNS}" viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="${LAT.length} latency samples, median ${Math.round(med)} ms" font-family="system-ui,sans-serif">${g}</svg>`;
+  const svg = el.querySelector('svg');
+  svg.addEventListener('pointerover', ev => { const h = ev.target.closest('.hd'); if (!h) return; const i = +h.dataset.i, r = svg.getBoundingClientRect(); tipAt(el, `<div><b>${Math.round(LAT[i])} ms</b> sample ${i + 1}</div>`, X(i) * r.width / W, Y(LAT[i]) * r.height / H); });
+  svg.addEventListener('pointerleave', () => { const t = el.querySelector('.tip'); if (t) t.hidden = true; });
+}
+function drawTable(){
+  $('#spdTable').innerHTML = `<table><thead><tr><th>Time</th><th>Phase</th><th>Throughput</th></tr></thead><tbody>${SAMPLES.map(p => `<tr><td>${p.t.toFixed(2)} s</td><td>${PHASE[p.ph][0]}</td><td>${rateTxt(p.v)}</td></tr>`).join('')}</tbody></table>
+    <table style="margin-top:10px"><thead><tr><th>Latency sample</th><th>ms</th></tr></thead><tbody>${LAT.map((v, i) => `<tr><td>${i + 1}</td><td>${v.toFixed(1)}</td></tr>`).join('')}</tbody></table>`;
+}
+new ResizeObserver(() => { drawThr(); drawLat(); }).observe($('#pane-spd'));
+
+async function speedTest(){
+  const b = $('#spdGo'); b.disabled = true; used = 0; SAMPLES = []; LAT = []; meter.bytes = 0;
+  const box = (id, label, key) => `<div class="card"><div class="muted">${key ? `<span class="lk" style="margin:0 6px 0 0"><i style="background:var(${key})"></i></span>` : ''}${label}</div><div class="gauge" id="${id}">—</div></div>`;
+  $('#spdOut').innerHTML = `<div class="viz-root" style="display:contents">${box('sLat', 'Latency (idle)') + box('sDown', 'Download', '--s1') + box('sUp', 'Upload', '--s2')}</div>`;
+  $('#spdViz').hidden = false; $('#thrChart').innerHTML = ''; $('#latChart').innerHTML = ''; $('#spdTable').innerHTML = '';
+  const st = t => $('#spdState').innerHTML = t ? `<span class="spin"></span> ${t}` : '';
+  let stop = null;
+  try {
+    st('Measuring latency…');
+    for (let i = 0; i < 11; i++) { const t0 = performance.now(); await fetch(`${CF}/__down?bytes=0&_=${Math.random()}`, { cache: 'no-store' }); if (i) { LAT.push(performance.now() - t0); drawLat(); } }
+    const med = [...LAT].sort((a, c) => a - c)[LAT.length >> 1], jit = LAT.slice(1).reduce((a, x, k) => a + Math.abs(x - LAT[k]), 0) / (LAT.length - 1);
+    $('#sLat').innerHTML = `${Math.round(med)} <small>ms</small> <small>jitter ${Math.round(jit)} ms</small>`;
+    T0 = performance.now();
+    st('Download…');
+    stop = sampler('down', v => $('#sDown').innerHTML = mbps(v));
+    let d = await down(1e6, 4);
+    d = Math.max(d, await down(Math.round(Math.min(25e6, Math.max(1e6, d / 8 * 3 / 4))), 4));
+    stop(); $('#sDown').innerHTML = mbps(d);
+    st('Upload…');
+    stop = sampler('up', v => $('#sUp').innerHTML = mbps(v));
+    let u = await up(5e5, 4);
+    u = Math.max(u, await up(Math.round(Math.min(10e6, Math.max(5e5, u / 8 * 3 / 4))), 4));
+    stop(); stop = null; $('#sUp').innerHTML = mbps(u);
+    drawThr(); drawTable();
+    st(''); $('#spdState').textContent = `Done · used ${(used / 1e6).toFixed(0)} MB`;
+  } catch (e) { stop?.(); st(''); $('#spdState').innerHTML = `<span style="color:var(--bad)">${esc(e.message)}</span> — speed.cloudflare.com may be blocked on this network.`; }
+  b.disabled = false;
+}
+$('#spdGo').onclick = speedTest;
+
+/* ---------- MTU ---------- */
+const ENCAPS = [
+  ['PPPoE', 8, 'DSL / fibre PPP sessions'], ['MPLS label', 4, 'per label on a 1500-byte core'], ['GRE over IPv4', 24, '20 IP + 4 GRE'], ['GRE over IPv6', 44, '40 IP + 4 GRE'],
+  ['IP-in-IP / 6in4 / SIT', 20, 'IPv4 outer header'], ['IPv4-in-IPv6 (DS-Lite, MAP-E)', 40, 'IPv6 outer header'], ['GTP-U (mobile core)', 36, '20 IP + 8 UDP + 8 GTP'],
+  ['VXLAN over IPv4', 50, '20 IP + 8 UDP + 8 VXLAN + 14 inner Ethernet'], ['VXLAN over IPv6', 70, '40 IP + 8 UDP + 8 VXLAN + 14 Ethernet'],
+  ['WireGuard over IPv4', 60, '20 IP + 8 UDP + 32 WireGuard'], ['WireGuard over IPv6', 80, '40 IP + 8 UDP + 32 WireGuard'],
+  ['IPsec ESP tunnel, AES-GCM', 57, '≈ outer IP + ESP + IV + ICV + padding'], ['IPsec ESP tunnel, AES-CBC + SHA1', 73, 'worst case incl. padding'], ['IPsec NAT-T (UDP 4500)', 8, 'add to IPsec when NAT is in the path'],
+  ['L2TPv2 over UDP + PPP', 40, '20 IP + 8 UDP + 8 L2TP + 4 PPP'],
+];
+function mtuCalc(){
+  if (!$('#mRows').children.length) {
+    $('#mRows').innerHTML = ENCAPS.map(([n, b, d], i) => `<tr><td>${esc(n)}<div class="muted" style="font-size:11.5px">${esc(d)}</div></td><td>${b}</td><td><input type="number" min="0" max="8" value="0" data-e="${i}"></td></tr>`).join('');
+    $('#mRows').addEventListener('input', mtuCalc); $('#mBase').addEventListener('input', mtuCalc);
+  }
+  const base = +$('#mBase').value || 1500, over = $$('#mRows input').reduce((a, x) => a + ENCAPS[+x.dataset.e][1] * (+x.value || 0), 0), mtu = base - over;
+  const used = $$('#mRows input').filter(x => +x.value).map(x => `${ENCAPS[+x.dataset.e][0]}${+x.value > 1 ? ' ×' + x.value : ''}`);
+  const mss4 = mtu - 40, mss6 = mtu - 60;
+  $('#mOut').innerHTML = kv([['Overhead', `${over} bytes${used.length ? ` <span class="muted">(${esc(used.join(', '))})</span>` : ''}`], ['Inner IP MTU', `<b style="font-size:18px">${mtu}</b>${mtu < 1280 ? ' ' + badge('bad', 'below IPv6 minimum 1280') : mtu < 1500 ? ' ' + badge('warn', 'below 1500 — clamp MSS') : ''}`],
+    ['TCP MSS (IPv4)', `<b>${mss4}</b> <span class="muted">MTU − 20 IP − 20 TCP</span>`], ['TCP MSS (IPv6)', `<b>${mss6}</b> <span class="muted">MTU − 40 IP − 20 TCP</span>`],
+    ['Max ping payload', `IPv4 ${mtu - 28} · IPv6 ${mtu - 48} <span class="muted">(MTU − IP − 8 ICMP)</span>`]]) +
+    `<h3>Clamp TCP MSS</h3><pre>${esc([`# MikroTik RouterOS`, `/ip firewall mangle add chain=forward protocol=tcp tcp-flags=syn action=change-mss new-mss=clamp-to-pmtu passthrough=yes`,
+      `/ipv6 firewall mangle add chain=forward protocol=tcp tcp-flags=syn action=change-mss new-mss=clamp-to-pmtu passthrough=yes`, ``,
+      `# Cisco IOS / IOS-XE (on the tunnel or dialer interface)`, ` ip mtu ${mtu}`, ` ip tcp adjust-mss ${mss4}`, ` ipv6 tcp adjust-mss ${mss6}`, ``,
+      `# Linux (iptables / nftables)`, `iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu`, `nft add rule inet filter forward tcp flags syn tcp option maxseg size set rt mtu`, ``,
+      `# Juniper SRX`, `set security flow tcp-mss all-tcp mss ${mss4}`, ``,
+      `# Windows — set the interface MTU`, `netsh interface ipv4 set subinterface "Ethernet" mtu=${mtu} store=persistent`].join('\n'))}</pre>`;
+  mtuScript();
+}
+function mtuScript(){
+  const host = $('#mHost').value.trim() || '1.1.1.1', os = $('#mOs').value, v6 = $('#mFam').value === '6', hdr = v6 ? 48 : 28, hi = 1500 - hdr, h = host.replace(/[^\w.:-]/g, '');
+  const s = {
+    win: `# Paste into PowerShell. Binary-searches the largest ${v6 ? 'IPv6' : 'IPv4'} ping that is not fragmented.
+$target = '${h}'; $lo = 0; $hi = ${hi}
+if (-not ((ping.exe -n 1 -w 2000 ${v6 ? '-6' : '-4'} $target) -match 'time[=<]')) { throw "$target does not answer ping" }
+while ($lo -lt $hi) {
+  $mid = [int][math]::Ceiling(($lo + $hi) / 2)
+  $ok = (ping.exe -n 1 -w 1500 ${v6 ? '-6' : '-4 -f'} -l $mid $target) -match 'time[=<]'
+  if ($ok) { $lo = $mid } else { $hi = $mid - 1 }
+}
+"Largest unfragmented payload: $lo bytes  ->  path MTU $($lo + ${hdr})"`,
+    linux: `# Bash. Binary-searches the largest ${v6 ? 'IPv6' : 'IPv4'} ping that is not fragmented.
+t=${h}; lo=0; hi=${hi}
+ping ${v6 ? '-6 ' : ''}-c1 -W2 "$t" >/dev/null || { echo "$t does not answer ping"; exit 1; }
+while [ $lo -lt $hi ]; do
+  mid=$(( (lo + hi + 1) / 2 ))
+  if ping ${v6 ? '-6 ' : ''}-c1 -W1 -M do -s $mid "$t" >/dev/null 2>&1; then lo=$mid; else hi=$((mid - 1)); fi
+done
+echo "Largest unfragmented payload: $lo bytes  ->  path MTU $((lo + ${hdr}))"
+# Or per hop: tracepath ${v6 ? '-6 ' : ''}-n ${h}`,
+    mac: `# zsh / bash on macOS. Binary-searches the largest ${v6 ? 'IPv6' : 'IPv4'} ping that is not fragmented.
+t=${h}; lo=0; hi=${hi}
+${v6 ? 'ping6' : 'ping'} -c1 "$t" >/dev/null || { echo "$t does not answer ping"; exit 1; }
+while [ $lo -lt $hi ]; do
+  mid=$(( (lo + hi + 1) / 2 ))
+  if ${v6 ? 'ping6 -c1 -D' : 'ping -c1 -t1 -D'} -s $mid "$t" >/dev/null 2>&1; then lo=$mid; else hi=$((mid - 1)); fi
+done
+echo "Largest unfragmented payload: $lo bytes  ->  path MTU $((lo + ${hdr}))"`,
+  }[os];
+  $('#mScript').textContent = s;
+  $('#mNote').innerHTML = `Payload + ${hdr} bytes of headers (${v6 ? '40 IPv6' : '20 IPv4'} + 8 ICMP) = path MTU. Typical results: 1500 Ethernet, 1492 PPPoE, 1420–1440 WireGuard / IPsec, 1280 for some IPv6 tunnels. If even small pings fail, ICMP is blocked to that host — try another.`;
+}
+['#mHost', '#mOs', '#mFam'].forEach(s => $(s).addEventListener('input', mtuScript));
+$('#mCp').onclick = e => copyText($('#mScript').textContent, e.target);
+
+/* ---------- browser & WebRTC ---------- */
+async function browserInfo(){
+  const n = navigator, c = n.connection || {};
+  const uad = n.userAgentData ? await n.userAgentData.getHighEntropyValues(['platformVersion', 'architecture', 'bitness', 'fullVersionList']).catch(() => null) : null;
+  $('#brOut').innerHTML = kv([
+    ['Browser', esc(uad?.fullVersionList?.filter(b => !/Not.?A.?Brand|Chromium/i.test(b.brand)).map(b => `${b.brand} ${b.version}`).join(', ') || n.userAgent)],
+    ['Platform', esc(uad ? (n.userAgentData.platform === 'Windows' && uad.platformVersion ? `Windows ${parseInt(uad.platformVersion) >= 13 ? '11' : '10'}` : `${n.userAgentData.platform} ${uad.platformVersion || ''}`) + ` ${uad.architecture || ''}${uad.bitness ? ' ' + uad.bitness + '-bit' : ''}` : n.platform)],
+    ['Connection type', c.effectiveType ? `${esc(c.effectiveType)}${c.downlink ? ` · ~${c.downlink} Mbps` : ''}${c.rtt != null ? ` · ~${c.rtt} ms RTT` : ''} <span class="muted">(browser estimate)</span>` : null],
+    ['Data saver', c.saveData ? 'on' : null], ['Online', n.onLine ? 'yes' : 'no'],
+    ['Language', esc((n.languages || [n.language]).join(', '))], ['Time zone', esc(Intl.DateTimeFormat().resolvedOptions().timeZone)],
+    ['Screen', `${screen.width}×${screen.height} @ ${devicePixelRatio}x`], ['CPU threads', n.hardwareConcurrency || null], ['Memory', n.deviceMemory ? `≥ ${n.deviceMemory} GB` : null],
+    ['Cookies', n.cookieEnabled ? 'enabled' : 'disabled'], ['Do Not Track / GPC', `${n.doNotTrack === '1' ? 'DNT on' : 'DNT off'} · ${n.globalPrivacyControl ? 'GPC on' : 'GPC off'}`],
+    ['User agent', `<span style="font-size:11.5px">${esc(n.userAgent)}</span>`],
+  ]);
+  if (!window.RTCPeerConnection) { $('#rtcOut').innerHTML = '<p class="muted">WebRTC is disabled in this browser — nothing can leak through it.</p>'; return; }
+  const cands = [];
+  try {
+    const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }, { urls: 'stun:stun.l.google.com:19302' }] });
+    pc.createDataChannel('probe');
+    pc.onicecandidate = e => e.candidate?.candidate && cands.push(e.candidate.candidate);
+    await pc.setLocalDescription(await pc.createOffer());
+    await new Promise(r => { const t = setTimeout(r, 5000); pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') { clearTimeout(t); r(); } }; });
+    pc.close();
+  } catch (e) { $('#rtcOut').innerHTML = `<p class="muted">WebRTC probe failed: ${esc(e.message)}</p>`; return; }
+  const parsed = cands.map(s => { const p = s.split(' '); return { addr: p[4], type: p[p.indexOf('typ') + 1], proto: p[2] }; }).filter(x => x.addr);
+  const host = [...new Set(parsed.filter(x => x.type === 'host').map(x => x.addr))], srflx = [...new Set(parsed.filter(x => x.type === 'srflx').map(x => x.addr))];
+  let httpIPs = [];
+  try { httpIPs = (await Promise.allSettled([getJ('https://api4.ipify.org?format=json').then(x => x.ip), getJ('https://api6.ipify.org?format=json', 5000).then(x => x.ip)])).filter(r => r.status === 'fulfilled').map(r => r.value); } catch {}
+  const leak = srflx.filter(a => !httpIPs.includes(a));
+  const cg = host.find(a => { const n4 = parseIPv4(a); return n4 != null && ((n4 >>> 22) === (0x64400000 >>> 22)); });
+  $('#rtcOut').innerHTML = kv([
+    ['Public IP via STUN', srflx.length ? srflx.map(esc).join('<br>') : '<span class="muted">none (STUN blocked or UDP filtered)</span>'],
+    ['Public IP via HTTP', httpIPs.map(esc).join('<br>') || '—'],
+    ['Local addresses', host.length ? host.map(a => a.endsWith('.local') ? `<span class="muted">${esc(a)}</span> <span class="muted">(hidden by mDNS)</span>` : esc(a)).join('<br>') : '<span class="muted">none exposed</span>'],
+  ]) + `<div style="margin-top:10px">${leak.length ? badge('warn', 'possible WebRTC leak') + ` <span>STUN sees ${esc(leak.join(', '))}, which differs from your HTTP address — if you use a VPN or proxy, WebRTC is bypassing it.</span>`
+      : srflx.length ? badge('ok', 'no WebRTC leak') + ' STUN and HTTP see the same public address.' : ''}${cg ? `<div style="margin-top:6px">${badge('info', 'CGNAT')} Local address ${esc(cg)} is in 100.64.0.0/10 — your ISP uses carrier-grade NAT.</div>` : ''}</div>
+    <p class="note">STUN servers: stun.cloudflare.com, stun.l.google.com. Browsers hide your LAN address behind a random <span class="mono">.local</span> name unless the page has camera / mic permission.</p>`;
+}
+
+tab(TABS.some(([k]) => k === getParam('tab')) ? getParam('tab') : 'ov');
+</script>
+
+</div>
+</body>
+</html>
