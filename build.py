@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Wraps src/<slug>.html fragments into tools/<slug>/index.html with the shared shell.
+"""Wraps src/<slug>.html fragments into tools/<slug>/index.html with the shared shell. 
 Fragment format: first line  <!-- title: ... | desc: ... [| js: decoders] -->  then body HTML + <script>."""
 import pathlib, re, html
 
