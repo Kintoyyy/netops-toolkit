@@ -14,6 +14,7 @@ Browser-based OSINT and IT utilities for ISP operators, DNS admins and security 
 | IOC Extractor & Defanger | offline | IPs, domains, URLs, hashes, CVEs, ATT&CK IDs |
 | Subnet Calculator | offline | IPv4/IPv6 math, VLSM split, CIDR aggregation |
 | Blocklist Converter | offline | RPZ, Unbound, dnsmasq, MikroTik, AdGuard, Squid, ipset |
+| PCAP Analyzer | offline | pcap/pcapng triage: port scans, DNS/DGA/tunneling, ICMP channels, follow stream, HTTP export, credentials |
 | MAC Address Lookup | online | OUI vendor, formats, randomized MAC, EUI-64 |
 | Encode / Decode Toolbox | offline | Base64, URL, hex, JWT, hashes, timestamps, generators |
 | Recursive Decoder | offline | Recursive auto-decoding (Base64/32/58/85, hex, binary, Morse, ROT, gzip…) until readable text appears |

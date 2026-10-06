@@ -1,0 +1,343 @@
+<!-- title: PCAP Analyzer | desc: Wireshark-lite in your browser for pcap / pcapng — auto-triage, port-scan fingerprinting, DNS / DGA / tunneling, ICMP covert channels, follow TCP stream, HTTP object export, credentials and pattern search. Nothing is uploaded. | js: decoders,pcap -->
+<style>
+.tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin:16px 0 0}
+.tab{border:1px solid transparent;border-bottom:none;border-radius:8px 8px 0 0;padding:8px 14px;cursor:pointer;color:var(--muted);background:none;font:inherit}
+.tab.on{background:var(--panel);border-color:var(--border);color:var(--text);font-weight:600;margin-bottom:-1px}
+.tab .n{font-size:11px;background:var(--code-bg);border-radius:9px;padding:0 6px;margin-left:5px;color:var(--muted)}
+.pane{background:var(--panel);border:1px solid var(--border);border-top:none;border-radius:0 0 10px 10px;padding:16px}
+tr.click{cursor:pointer} tr.click:hover td{background:var(--code-bg)}
+.cli{color:#c0392b} .srv{color:#2457d6}
+:root[data-theme="dark"] .cli{color:#ff8a80} :root[data-theme="dark"] .srv{color:#8fb2ff}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .cli{color:#ff8a80} :root:not([data-theme="light"]) .srv{color:#8fb2ff}}
+.find{display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--border)} .find:last-child{border-bottom:none}
+.stat{display:inline-block;margin-right:18px} .stat b{font-size:18px;display:block}
+td.trunc{max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+</style>
+<section class="panel" id="drop" style="text-align:center;border-style:dashed;padding:26px">
+  <p style="margin:0 0 10px"><b>Drop a .pcap / .pcapng file here</b> or</p>
+  <label class="btn" for="file" style="background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600">Choose capture…</label><input type="file" id="file" accept=".pcap,.pcapng,.cap,.dmp,application/vnd.tcpdump.pcap">
+  <div class="row" style="justify-content:center"><label class="small" style="margin:0">Highlight regex</label><input type="text" id="flagre" class="mono" style="width:300px" title="Saved in this browser"></div>
+  <p class="note">Parsed entirely in your browser. Supports Ethernet, Linux cooked (SLL/SLL2), raw IP, loopback/null, VLAN, IPv4/IPv6, TCP/UDP/ICMP, ARP, DNS, HTTP, TLS SNI, FTP/SMTP/POP/IMAP/Telnet/SNMP.</p>
+</section>
+<div id="app" hidden>
+  <div class="tabs" id="tabs"></div>
+  <div class="pane" id="pane"></div>
+</div>
+
+<script>
+let CAP = null, P = [], FLOWS = [], CACHE = {};
+const fmtB = n => n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(2) + ' MB';
+const fmtT = t => { const d = new Date(t * 1000); return isNaN(d) ? String(t) : d.toISOString().replace('T', ' ').replace('Z', ''); };
+const rel = t => (t - (P[0]?.ts || 0)).toFixed(6);
+const svc = port => PORTNAMES[port] ? `${port}/${PORTNAMES[port]}` : String(port);
+const badge = (c, t) => `<span class="b b-${c}">${esc(t)}</span>`;
+const isPub = ip => ipKind(ip) === 4 ? !v4Special(parseIPv4(ip)) : ipKind(ip) === 6 ? v6Special(parseIPv6(ip)) === 'Global unicast' : false;
+const ipLink = ip => isPub(ip) ? `<a href="../domain-intel/?q=${encodeURIComponent(ip)}" title="Lookup" target="_blank">${esc(ip)}</a>` : esc(ip || '');
+
+/* ---------------- loading ---------------- */
+async function load(file){
+  $('#drop').querySelector('p').innerHTML = `<span class="spin"></span> Parsing <b>${esc(file.name)}</b>…`;
+  await sleep(10);
+  try {
+    const buf = new Uint8Array(await file.arrayBuffer());
+    CAP = parseCapture(buf); CAP.name = file.name; CAP.size = buf.length;
+    P = CAP.packets; P.forEach((p, i) => { p.no = i + 1; decodePacket(p); });
+    FLOWS = buildFlows(P); CACHE = {};
+    $('#drop').querySelector('p').innerHTML = `<b>${esc(file.name)}</b> loaded — drop another file to replace`;
+    $('#app').hidden = false; renderTabs(); show('summary');
+  } catch (e) {
+    $('#drop').querySelector('p').innerHTML = `<span style="color:var(--bad)">${esc(e.message)}</span> — drop another file`;
+  }
+}
+const get = (k, fn) => CACHE[k] ??= fn();
+
+/* ---------------- tabs ---------------- */
+const TABS = [['summary', 'Summary'], ['packets', 'Packets'], ['convs', 'Conversations'], ['dns', 'DNS'], ['http', 'HTTP & Files'], ['scans', 'Scans'], ['icmp', 'ICMP'], ['creds', 'Credentials'], ['flags', 'Pattern search']];
+function renderTabs(){
+  const dns = get('dns', () => analyzeDNS(P)), sc = get('scans', () => analyzeScans(P)), ic = get('icmp', () => analyzeICMP(P));
+  const counts = { packets: P.length, convs: FLOWS.length, dns: dns.queries.length, scans: sc.scans.length + sc.pingSweeps.length + sc.arpSweeps.length, icmp: ic.echo.length, http: P.filter(p => p.app === 'HTTP').length };
+  $('#tabs').innerHTML = TABS.map(([k, n]) => `<button class="tab" data-t="${k}">${n}${counts[k] != null ? `<span class="n">${counts[k].toLocaleString()}</span>` : ''}</button>`).join('');
+  $('#tabs').onclick = e => { const b = e.target.closest('.tab'); if (b) show(b.dataset.t); };
+}
+async function show(t){ $$('#tabs .tab').forEach(b => b.classList.toggle('on', b.dataset.t === t)); $('#pane').innerHTML = '<span class="spin"></span>'; await sleep(5); $('#pane').innerHTML = ''; await VIEWS[t](); }
+
+/* ---------------- views ---------------- */
+const VIEWS = {};
+
+VIEWS.summary = async () => {
+  const dur = P.length ? P.at(-1).ts - P[0].ts : 0;
+  const protos = {}; P.forEach(p => { const k = p.app || p.proto || '?'; protos[k] = (protos[k] || 0) + 1; });
+  const talkers = {}; P.forEach(p => { if (p.src) { talkers[p.src] = (talkers[p.src] || 0) + p.len; } });
+  const topT = Object.entries(talkers).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  const dns = get('dns', () => analyzeDNS(P)), sc = get('scans', () => analyzeScans(P)), ic = get('icmp', () => analyzeICMP(P)), creds = get('creds', () => findCreds(P, FLOWS));
+  const flagHits = await get('flaghunt', () => flagHunt());
+  const sni = [...new Set(P.filter(p => p.sni).map(p => p.sni))];
+  const clear = Object.keys(protos).filter(k => ['FTP', 'Telnet', 'HTTP', 'SMTP', 'POP3', 'IMAP'].includes(k));
+  const F = [];
+  if (flagHits.length) F.push(['bad', 'Pattern match', `<b class="mono">${hlFlags(flagHits[0].flag)}</b> <span class="muted">via ${esc(flagHits[0].source)}</span>${flagHits.length > 1 ? ` — and ${flagHits.length - 1} more candidate(s) in <a href="#" data-go="flags">Pattern search</a>` : ''}`]);
+  for (const s of sc.scans) F.push(['warn', 'Port scan', `<b>${esc(s.src)}</b> → <b>${esc(s.dst)}</b>: ${s.ports.toLocaleString()} ports, <b>${esc(s.type)}</b> (nmap <span class="mono">${esc(s.nmap)}</span>). Open: <span class="mono">${s.open.length ? s.open.map(svc).join(', ') : 'none seen'}</span>. <a href="#" data-go="scans">Details</a>`]);
+  for (const s of sc.pingSweeps) F.push(['warn', 'Ping sweep', `${esc(s.src)} pinged ${s.targets} hosts (${s.alive} replied) — nmap -sn style host discovery.`]);
+  for (const s of sc.arpSweeps) F.push(['warn', 'ARP sweep', `${esc(s.src)} ARP-requested ${s.targets} addresses — local host discovery.`]);
+  for (const h of dns.suspects) F.push(['bad', 'DGA-like DNS', `<b>${esc(h.host)}</b> made ${h.q} queries, ${h.nx} NXDOMAIN (${Math.round(h.nxRate * 100)}%) across ${h.resolvers.size} resolver(s).${dns.dgaHits.filter(n => n.hosts.has(h.host)).map(n => ` Resolved: <b class="mono">${esc(n.name.replace(/\.$/, ''))}</b> → <span class="mono">${esc([...n.answers].join(', '))}</span> (likely C2)`).join('')} <a href="#" data-go="dns">Details</a>`]);
+  for (const t of dns.tunnels) F.push(['bad', 'DNS tunneling?', `${t.subs.length} unique names under <b class="mono">${esc(t.domain)}</b>, longest label ${t.maxLabel} chars.`]);
+  if (ic.covert) F.push(['bad', 'ICMP covert channel', `${ic.odd.length} echo request(s) carry non-standard payloads (e.g. “${esc(safeText(ic.odd[0].payload, 40))}”). <a href="#" data-go="icmp">Reassemble</a>`]);
+  if (creds.length) F.push(['bad', 'Cleartext credentials', `${creds.length} found (${[...new Set(creds.map(c => c.proto))].join(', ')}). <a href="#" data-go="creds">Show</a>`]);
+  if (clear.length) F.push(['info', 'Cleartext protocols', clear.join(', ')]);
+  const files = await get('httpobjs', () => allHttpObjects());
+  if (files.length) F.push(['info', 'HTTP objects', `${files.length} response bodies can be exported. <a href="#" data-go="http">Open</a>`]);
+  if (sni.length) F.push(['info', 'TLS server names', sni.slice(0, 15).map(s => `<span class="mono">${esc(s)}</span>`).join(', ') + (sni.length > 15 ? '…' : '')]);
+  if (!F.length) F.push(['ok', 'Nothing flagged', 'No scans, DGA, covert channels or credentials detected. Browse the tabs manually.']);
+  const ci = CAP.capInfo || {};
+  $('#pane').innerHTML = `
+    <div><span class="stat"><b>${P.length.toLocaleString()}</b><span class="muted">packets</span></span><span class="stat"><b>${fmtB(CAP.size)}</b><span class="muted">${esc(CAP.format)}</span></span>
+      <span class="stat"><b>${dur.toFixed(2)} s</b><span class="muted">duration</span></span><span class="stat"><b>${FLOWS.length}</b><span class="muted">conversations</span></span>
+      <span class="stat"><b>${Object.keys(talkers).length}</b><span class="muted">hosts</span></span></div>
+    <p class="note">First packet ${esc(fmtT(P[0]?.ts))} UTC · last ${esc(fmtT(P.at(-1)?.ts))} UTC · link type ${CAP.links.join(', ')}${ci.app ? ` · captured with ${esc(ci.app)}` : ''}${ci.os ? ` on ${esc(ci.os)}` : ''}${ci.ifaces?.length ? ` · interface ${esc(ci.ifaces.join(', '))}` : ''}</p>
+    <h2 style="margin-top:16px">Findings</h2>${F.map(([c, t, d]) => `<div class="find">${badge(c, t)}<div>${d}</div></div>`).join('')}
+    <div class="grid2" style="margin-top:18px"><div><h2>Protocols</h2><table><tbody>${Object.entries(protos).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<tr><td>${esc(k)}</td><td style="width:60%"><div style="background:var(--accent);opacity:.75;height:10px;border-radius:3px;width:${Math.max(1, v / P.length * 100)}%"></div></td><td>${v.toLocaleString()}</td></tr>`).join('')}</tbody></table></div>
+      <div><h2>Top talkers (bytes sent)</h2><table><tbody>${topT.map(([ip, b]) => `<tr><td class="mono">${ipLink(ip)}</td><td>${fmtB(b)}</td></tr>`).join('')}</tbody></table></div></div>`;
+  $$('[data-go]').forEach(a => a.onclick = e => { e.preventDefault(); show(a.dataset.go); });
+};
+
+/* ---- packets ---- */
+let pktPage = 0, pktFilter = '';
+function matchFilter(p, f){
+  if (!f) return true;
+  return f.split(/\s*&&\s*/).every(term => {
+    const m = term.match(/^(ip|src|dst|port|sport|dport|proto|flags|len|app|no)\s*(==|!=|>|<|~)\s*(.+)$/i);
+    if (!m) { const t = term.toLowerCase(); return [p.src, p.dst, p.proto, p.app, p.info, p.sni, p.dns?.qname].some(x => x && String(x).toLowerCase().includes(t)); }
+    const [, k, op, v] = m; const key = k.toLowerCase();
+    const vals = key === 'ip' ? [p.src, p.dst] : key === 'port' ? [p.sport, p.dport] : key === 'proto' ? [p.proto, p.app] : key === 'flags' ? [p.fstr] : [p[{ src: 'src', dst: 'dst', sport: 'sport', dport: 'dport', len: 'len', app: 'app', no: 'no' }[key]]];
+    const cmp = x => { if (x == null) return false; const sx = String(x).toLowerCase(), sv = v.toLowerCase(); return op === '==' ? sx === sv : op === '!=' ? sx !== sv : op === '~' ? sx.includes(sv) : op === '>' ? +x > +v : +x < +v; };
+    return op === '!=' ? vals.every(cmp) : vals.some(cmp);
+  });
+}
+VIEWS.packets = () => {
+  $('#pane').innerHTML = `<div class="row" style="margin-top:0"><input type="search" id="pf" class="grow mono" placeholder="Filter: text, or ip==10.0.0.5 && port==53 · proto==dns · flags==S · len>1000 · app~http" value="${esc(pktFilter)}">
+    <button id="pprev">◀</button><span id="pinfo" class="muted"></span><button id="pnext">▶</button></div>
+    <div class="tablewrap" style="margin-top:8px"><table><thead><tr><th>No.</th><th>Time</th><th>Source</th><th>Destination</th><th>Proto</th><th>Len</th><th>Info</th></tr></thead><tbody id="pb"></tbody></table></div><div id="pd"></div>`;
+  const draw = () => {
+    const list = P.filter(p => matchFilter(p, pktFilter)), per = 500, pages = Math.max(1, Math.ceil(list.length / per));
+    pktPage = Math.min(pktPage, pages - 1);
+    $('#pinfo').textContent = `${list.length.toLocaleString()} shown · page ${pktPage + 1}/${pages}`;
+    $('#pb').innerHTML = list.slice(pktPage * per, (pktPage + 1) * per).map(p => `<tr class="click" data-no="${p.no}"><td>${p.no}</td><td>${rel(p.ts)}</td><td class="mono">${esc(p.src || p.srcMac || '')}</td><td class="mono">${esc(p.dst || p.dstMac || '')}</td><td>${esc(p.app || p.proto || '')}</td><td>${p.len}</td><td class="mono trunc" style="font-size:12px" title="${esc(p.info || '')}">${hlFlags(p.info || '')}</td></tr>`).join('');
+  };
+  $('#pf').oninput = e => { pktFilter = e.target.value; pktPage = 0; draw(); };
+  $('#pprev').onclick = () => { pktPage = Math.max(0, pktPage - 1); draw(); };
+  $('#pnext').onclick = () => { pktPage++; draw(); };
+  $('#pb').onclick = e => { const tr = e.target.closest('tr[data-no]'); if (tr) packetDetail(P[tr.dataset.no - 1]); };
+  draw();
+};
+function packetDetail(p){
+  const rows = [['Frame', `#${p.no} · ${p.len} bytes on wire, ${p.data.length} captured · ${fmtT(p.ts)} UTC`]];
+  if (p.srcMac) rows.push(['Ethernet', `${p.srcMac} → ${p.dstMac}${p.vlan != null ? ` · VLAN ${p.vlan}` : ''}`]);
+  if (p.ipv) rows.push([`IPv${p.ipv}`, `${p.src} → ${p.dst} · TTL ${p.ttl}${p.ipid != null ? ` · ID ${p.ipid}` : ''}`]);
+  if (p.proto === 'TCP') rows.push(['TCP', `${p.sport} → ${p.dport} · flags ${p.fstr} · seq ${p.seq} · ack ${p.ack} · win ${p.win}`]);
+  if (p.proto === 'UDP') rows.push(['UDP', `${p.sport} → ${p.dport}`]);
+  if (p.icmpType != null) rows.push([p.proto, `type ${p.icmpType} code ${p.icmpCode}${p.icmpId != null ? ` · id ${p.icmpId} seq ${p.icmpSeq}` : ''}`]);
+  if (p.dns) rows.push(['DNS', `${p.dns.qr ? 'response ' + p.dns.rcodeName : 'query'} · ${p.dns.questions.map(q => q.type + ' ' + q.name).join(', ')}${p.dns.answers.length ? ' · ' + p.dns.answers.map(a => a.type + ' ' + a.data).join(', ') : ''}`]);
+  if (p.sni) rows.push(['TLS SNI', p.sni]);
+  $('#pd').innerHTML = `<section class="card" style="margin-top:12px"><div class="t">Packet ${p.no} ${p.flow ? `<button id="fs">Follow stream</button>` : ''}</div>
+    <div class="kv">${rows.map(([k, v]) => `<div>${k}</div><div>${esc(v)}</div>`).join('')}</div>
+    ${p.payload?.length ? `<h3>Payload (${p.payload.length} bytes)</h3><pre style="max-height:200px">${hlFlags(safeText(p.payload, 3000))}</pre>` : ''}
+    <h3>Frame bytes</h3><pre style="max-height:260px;font-size:12px">${esc(hexdump(p.data, 0, 4096))}</pre></section>`;
+  if (p.flow) $('#fs').onclick = () => { show('convs').then(() => follow(p.flow)); };
+  $('#pd').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+/* ---- conversations / follow stream ---- */
+VIEWS.convs = () => {
+  const list = [...FLOWS].sort((a, b) => b.bytes - a.bytes);
+  $('#pane').innerHTML = `<div class="row" style="margin-top:0"><input type="search" id="cf" class="grow" placeholder="Filter conversations…"><button id="ccsv">CSV</button></div>
+    <div class="tablewrap" style="margin-top:8px;max-height:460px;overflow:auto"><table><thead><tr><th>Proto</th><th>Client</th><th>Server</th><th>App</th><th>Packets</th><th>Bytes</th><th>Duration</th><th></th></tr></thead><tbody id="cb"></tbody></table></div><div id="fo"></div>`;
+  const draw = () => { const q = $('#cf').value.toLowerCase();
+    $('#cb').innerHTML = list.filter(f => !q || `${f.proto} ${f.cli} ${f.srv} ${f.sport} ${f.app || ''} ${PORTNAMES[f.sport] || ''}`.toLowerCase().includes(q)).slice(0, 3000).map(f => `<tr><td>${f.proto}</td><td class="mono">${esc(f.cli)}:${f.cport}</td><td class="mono">${ipLink(f.srv)}:${esc(svc(f.sport))}</td><td>${esc(f.app || '')}</td><td>${f.pkts.length}</td><td>${fmtB(f.bytes)}</td><td>${(f.last - f.first).toFixed(2)}s</td><td><button data-k="${esc(f.key)}" style="padding:2px 8px;font-size:12px">Follow</button></td></tr>`).join(''); };
+  $('#cf').oninput = draw; draw();
+  $('#cb').onclick = e => { const b = e.target.closest('[data-k]'); if (b) follow(FLOWS.find(f => f.key === b.dataset.k)); };
+  $('#ccsv').onclick = () => download('conversations.csv', toCSV([['proto', 'client', 'cport', 'server', 'sport', 'app', 'packets', 'bytes', 'start', 'duration'], ...list.map(f => [f.proto, f.cli, f.cport, f.srv, f.sport, f.app || '', f.pkts.length, f.bytes, fmtT(f.first), (f.last - f.first).toFixed(3)])]), 'text/csv');
+};
+function follow(f){
+  const conv = conversation(f), cB = reassemble(f, true), sB = reassemble(f, false);
+  const hits = carve(concatBytes([cB, sB]));
+  const render = mode => conv.map(x => `<span class="${x.c ? 'cli' : 'srv'}">${mode === 'hex' ? esc(hexdump(x.data, 0, 65536)) : hlFlags(safeText(x.data, 200000))}</span>`).join('\n');
+  $('#fo').innerHTML = `<section class="card" style="margin-top:14px"><div class="t"><span><span class="mono cli">${esc(f.cli)}:${f.cport}</span> ⇄ <span class="mono srv">${esc(f.srv)}:${esc(svc(f.sport))}</span> <span class="muted" style="font-weight:400">${f.proto} · ${fmtB(cB.length)} client → · ${fmtB(sB.length)} ← server</span></span>
+    <span><select id="fm"><option value="ascii">ASCII</option><option value="hex">Hex</option></select> <button id="dlc">Client bytes</button> <button id="dls">Server bytes</button></span></div>
+    ${hits.length ? `<div style="margin:6px 0">${badge('info', 'embedded files')} ${hits.slice(0, 20).map((h, i) => `<button data-carve="${i}" style="padding:2px 8px;font-size:12px">${esc(h.name)} @${h.off}</button>`).join(' ')}</div>` : ''}
+    <pre id="fstream" style="max-height:520px;font-size:12.5px">${render('ascii') || '(no payload)'}</pre></section>`;
+  $('#fm').onchange = e => $('#fstream').innerHTML = render(e.target.value);
+  const base = `${f.cli}_${f.cport}-${f.srv}_${f.sport}`;
+  $('#dlc').onclick = () => downloadBytes(base + '_client.bin', cB);
+  $('#dls').onclick = () => downloadBytes(base + '_server.bin', sB);
+  const all = concatBytes([cB, sB]);
+  $$('[data-carve]').forEach(b => b.onclick = () => { const h = hits[+b.dataset.carve]; downloadBytes(`${base}_${h.off}.${h.ext}`, all.slice(h.off)); });
+  $('#fo').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/* ---- DNS ---- */
+VIEWS.dns = () => {
+  const d = get('dns', () => analyzeDNS(P));
+  const names = [...d.names].sort((a, b) => b.dgaScore - a.dgaScore || b.count - a.count);
+  $('#pane').innerHTML = `
+    ${d.suspects.length ? `<div class="err" style="margin-top:0">${d.suspects.map(h => `<b>${esc(h.host)}</b> looks infected with DGA malware: ${h.q} queries, ${Math.round(h.nxRate * 100)}% NXDOMAIN, ${h.uniq} unique names, ${h.resolvers.size} resolver(s).`).join('<br>')}
+      ${d.dgaHits.length ? `<br>Resolved from that host (probable C2): ${d.dgaHits.map(n => `<b class="mono">${esc(n.name.replace(/\.$/, ''))}</b> → <span class="mono">${esc([...n.answers].join(', '))}</span>`).join('; ')}` : ''}</div>` : ''}
+    ${d.tunnels.length ? `<div class="err">${d.tunnels.map(t => `Possible DNS tunnel/exfil under <b class="mono">${esc(t.domain)}</b>: ${t.subs.length} names, longest label ${t.maxLabel}.`).join('<br>')}</div>` : ''}
+    <h2>Clients</h2><div class="tablewrap"><table><thead><tr><th>Host</th><th>Queries</th><th>Unique names</th><th>NXDOMAIN</th><th>OK</th><th>Resolvers used</th></tr></thead><tbody>
+      ${d.hosts.slice(0, 50).map(h => `<tr><td class="mono">${esc(h.host)} ${d.suspects.includes(h) ? badge('bad', 'suspect') : ''}</td><td>${h.q}</td><td>${h.uniq}</td><td>${h.nx} <span class="muted">(${Math.round(h.nxRate * 100)}%)</span></td><td>${h.ok}</td><td class="mono" style="font-size:12px">${esc([...h.resolvers].join(', '))}</td></tr>`).join('')}</tbody></table></div>
+    <h2 style="margin-top:16px">Queried names</h2><div class="row" style="margin-top:0"><input type="search" id="dq" class="grow" placeholder="Filter names / answers…"><select id="dsort"><option value="dga">Sort: DGA-likeness</option><option value="count">Sort: count</option><option value="time">Sort: first seen</option></select><button id="dcp">Copy names</button><button id="dcsv">CSV</button></div>
+    <div class="tablewrap" style="margin-top:8px;max-height:520px;overflow:auto"><table><thead><tr><th>Name</th><th>Type</th><th>Count</th><th>Result</th><th>Answers</th><th title="Shannon entropy of first label">Entropy</th><th>DGA score</th></tr></thead><tbody id="db"></tbody></table></div>`;
+  const draw = () => { const q = $('#dq').value.toLowerCase(), s = $('#dsort').value;
+    const list = (s === 'time' ? d.names : s === 'count' ? [...d.names].sort((a, b) => b.count - a.count) : names).filter(n => !q || n.name.toLowerCase().includes(q) || [...n.answers].join(' ').toLowerCase().includes(q));
+    $('#db').innerHTML = list.slice(0, 3000).map(n => `<tr><td class="mono">${hlFlags(n.name || '')}</td><td>${esc(n.type)}</td><td>${n.count}</td><td>${n.rcode ? badge(n.rcode === 'NOERROR' ? 'ok' : n.rcode === 'NXDOMAIN' ? 'mute' : 'warn', n.rcode) : '<span class="muted">no reply</span>'}</td><td class="mono" style="font-size:12px">${esc([...n.answers].join(', '))}</td><td>${n.entropy.toFixed(2)}</td><td>${n.dgaScore >= 3 ? badge('bad', n.dgaScore + '/4') : n.dgaScore === 2 ? badge('warn', '2/4') : `<span class="muted">${n.dgaScore}/4</span>`}</td></tr>`).join(''); };
+  $('#dq').oninput = draw; $('#dsort').onchange = draw; draw();
+  $('#dcp').onclick = e => copyText(d.names.map(n => n.name.replace(/\.$/, '')).join('\n'), e.target);
+  $('#dcsv').onclick = () => download('dns-names.csv', toCSV([['name', 'type', 'count', 'rcode', 'answers', 'entropy', 'dga_score', 'hosts'], ...d.names.map(n => [n.name, n.type, n.count, n.rcode, [...n.answers].join(' '), n.entropy.toFixed(3), n.dgaScore, [...n.hosts].join(' ')])]), 'text/csv');
+};
+
+/* ---- HTTP & files ---- */
+async function allHttpObjects(){
+  const out = [];
+  for (const f of FLOWS) if (f.proto === 'TCP' && (f.app === 'HTTP' || [80, 8080, 8000, 8888].includes(f.sport))) {
+    try { const { reqs, objs } = await httpObjects(f); objs.forEach(o => out.push({ ...o, f })); if (!objs.length) reqs.forEach(r => out.push({ ...r, status: '(no response)', body: new Uint8Array(), ctype: '', f })); } catch {}
+  }
+  return out;
+}
+VIEWS.http = async () => {
+  const objs = await get('httpobjs', () => allHttpObjects());
+  const reqs = [];
+  for (const f of FLOWS) if (f.proto === 'TCP' && (f.app === 'HTTP' || [80, 8080, 8000, 8888].includes(f.sport))) { try { (await httpObjects(f)).reqs.forEach(r => reqs.push({ ...r, f })); } catch {} }
+  const uas = [...new Set(reqs.map(r => r.ua).filter(Boolean))], sni = {};
+  P.filter(p => p.sni).forEach(p => { sni[p.sni] = sni[p.sni] || new Set(); sni[p.sni].add(p.src); });
+  $('#pane').innerHTML = `<h2>HTTP objects (Export Objects → HTTP)</h2>${objs.length ? `<div class="tablewrap"><table><thead><tr><th>Request</th><th>Status</th><th>Type</th><th>Size</th><th></th></tr></thead><tbody>
+    ${objs.map((o, i) => `<tr><td class="mono" style="font-size:12px">${esc(o.method || '')} ${esc(o.host || '')}${hlFlags(o.uri || '')}</td><td>${esc(o.status)}</td><td>${esc(o.ctype)}</td><td>${fmtB(o.body.length)}</td><td style="white-space:nowrap">${o.body.length ? `<button data-dl="${i}" style="padding:2px 8px;font-size:12px">Save</button> <button data-pv="${i}" style="padding:2px 8px;font-size:12px">Preview</button>` : ''}</td></tr>`).join('')}</tbody></table></div><div id="hpv"></div>` : '<p class="muted">No cleartext HTTP traffic.</p>'}
+    ${reqs.some(r => r.method === 'POST') ? `<h2 style="margin-top:16px">POST bodies</h2>${reqs.filter(r => r.method === 'POST').map(r => `<div class="card" style="margin-bottom:8px"><div class="mono" style="font-size:12px">${esc(r.host)}${esc(r.uri)}</div><pre style="margin-top:6px">${hlFlags(r.body || '(empty)')}</pre></div>`).join('')}` : ''}
+    ${uas.length ? `<h2 style="margin-top:16px">User-Agents</h2><ul class="plain">${uas.map(u => `<li class="mono" style="font-size:12px">${esc(u)}</li>`).join('')}</ul>` : ''}
+    <h2 style="margin-top:16px">TLS server names (SNI)</h2>${Object.keys(sni).length ? `<table><tbody>${Object.entries(sni).map(([n, s]) => `<tr><td class="mono">${esc(n)}</td><td class="muted mono" style="font-size:12px">${esc([...s].join(', '))}</td></tr>`).join('')}</tbody></table>` : '<p class="muted">No TLS ClientHellos with SNI.</p>'}`;
+  const name = o => (o.uri || '/').split('?')[0].split('/').pop() || 'index';
+  $$('[data-dl]').forEach(b => b.onclick = () => { const o = objs[+b.dataset.dl]; downloadBytes(name(o), o.body); });
+  $$('[data-pv]').forEach(b => b.onclick = () => { const o = objs[+b.dataset.pv]; const isImg = /^image\//.test(o.ctype);
+    $('#hpv').innerHTML = `<div class="card" style="margin-top:10px"><div class="t mono" style="font-size:12px">${esc(o.host || '')}${esc(o.uri || '')}</div>${isImg ? `<img style="max-width:100%;max-height:400px" src="${URL.createObjectURL(new Blob([o.body], { type: o.ctype }))}">` : `<pre style="max-height:400px">${hlFlags(safeText(o.body, 100000))}</pre>`}</div>`; });
+};
+
+/* ---- scans ---- */
+VIEWS.scans = () => {
+  const s = get('scans', () => analyzeScans(P));
+  $('#pane').innerHTML = (s.scans.length ? s.scans.map(x => `<div class="card" style="margin-bottom:12px"><div class="t"><span class="mono">${esc(x.src)} → ${esc(x.dst)}</span>${badge('warn', x.type)}</div>
+      <div class="kv"><div>nmap technique</div><div><b>${esc(x.nmap)}</b></div><div>Ports probed</div><div>${x.ports.toLocaleString()}${x.udpPorts ? ` TCP + ${x.udpPorts} UDP` : ''}</div>
+        <div>Open</div><div><b>${x.open.length ? x.open.map(svc).join(', ') : 'none'}</b></div><div>Closed (RST)</div><div>${x.closed ?? '—'}</div>${x.filtered != null ? `<div>No reply / filtered</div><div>${x.filtered}</div>` : ''}${x.unfiltered != null ? `<div>Unfiltered (RST)</div><div>${x.unfiltered}</div>` : ''}
+        <div>Duration</div><div>${x.duration != null ? x.duration.toFixed(2) + ' s' : '—'}</div></div>
+      <ul class="plain" style="margin-top:8px">${x.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul></div>`).join('') : '<p class="muted" style="margin-top:0">No port scans detected (threshold: 15+ ports from one host to another).</p>') +
+    (s.pingSweeps.length ? `<h2>Ping sweeps</h2>${s.pingSweeps.map(x => `<p>${esc(x.src)} → ${x.targets} hosts, ${x.alive} replied</p>`).join('')}` : '') +
+    (s.arpSweeps.length ? `<h2>ARP sweeps</h2>${s.arpSweeps.map(x => `<p>${esc(x.src)} → ${x.targets} addresses</p>`).join('')}` : '') +
+    `<details style="margin-top:12px"><summary class="muted" style="cursor:pointer">How scan types are identified</summary><table style="margin-top:8px"><thead><tr><th>Probe</th><th>Open port reaction</th><th>nmap</th></tr></thead><tbody>
+      <tr><td>SYN</td><td>SYN-ACK → scanner ACK → RST (full handshake)</td><td>-sT connect</td></tr>
+      <tr><td>SYN</td><td>SYN-ACK → scanner RST (no ACK)</td><td>-sS SYN / stealth</td></tr>
+      <tr><td>FIN / none / FIN+PSH+URG</td><td>no reply (closed → RST)</td><td>-sF / -sN / -sX</td></tr>
+      <tr><td>ACK</td><td>RST = unfiltered, silence = filtered</td><td>-sA</td></tr>
+      <tr><td>UDP</td><td>reply or silence (closed → ICMP port unreachable)</td><td>-sU</td></tr></tbody></table></details>`;
+};
+
+/* ---- ICMP ---- */
+VIEWS.icmp = () => {
+  const ic = get('icmp', () => analyzeICMP(P));
+  if (!ic.echo.length) { $('#pane').innerHTML = '<p class="muted" style="margin-top:0">No ICMP echo packets with payloads.</p>'; return; }
+  const join = list => list.map(p => asLatin(p.payload)).join('');
+  const variants = [['All echo-request payloads, in order', ic.req], ['Unique request payloads, in order', [...new Map(ic.req.map(p => [asLatin(p.payload), p])).values()]], ['Non-standard requests only', ic.odd]];
+  const uniq = [...new Set(ic.req.map(p => asLatin(p.payload)))], auto = assembleFragments(uniq);
+  $('#pane').innerHTML = `${ic.covert ? `<div class="err" style="margin-top:0">${ic.odd.length} echo request(s) have non-standard payloads — likely a covert channel / exfiltration. Normal ping payloads are fixed patterns.</div>` : ''}
+    <h2>Fragment assembler</h2><p class="muted" style="margin:0 0 6px">Unique request payloads in capture order. Auto-selected: the piece that opens a <span class="mono">name{…}</span> pattern, matching pieces after it, and the piece that closes it. Tick / untick to adjust.</p>
+    <div class="card" style="margin-bottom:12px"><div id="frag" style="display:flex;flex-wrap:wrap;gap:6px"></div><pre id="fragOut" style="margin-top:10px"></pre><div class="row"><button id="fragCp">Copy</button></div></div>
+    <h2>Raw concatenations</h2>${variants.map(([t, l]) => `<div class="card" style="margin-bottom:8px"><div class="t">${t} <span class="muted" style="font-weight:400">${l.length} packets</span></div><pre style="max-height:160px">${hlFlags(safeText(te.encode(join(l)), 20000))}</pre></div>`).join('')}
+    <div class="card" style="margin-bottom:8px"><div class="t">Other ICMP fields as characters</div><div class="kv">
+      ${['icmpSeq', 'icmpId', 'ttl', 'ipid'].map(k => { const s = ic.req.map(p => p[k] != null ? String.fromCharCode(p[k] & 255) : '').join(''); return `<div>${k} (low byte)</div><div>${hlFlags(safeText(te.encode(s), 300))}</div>`; }).join('')}
+      <div>payload length</div><div>${hlFlags(safeText(te.encode(ic.req.map(p => String.fromCharCode(p.payload.length & 255)).join('')), 300))}</div></div></div>
+    <h2>Echo packets</h2><div class="tablewrap" style="max-height:480px;overflow:auto"><table><thead><tr><th>No.</th><th>Type</th><th>Src → Dst</th><th>id / seq</th><th>Len</th><th>Payload</th></tr></thead><tbody>
+    ${ic.echo.map(p => `<tr><td>${p.no}</td><td>${p.isEchoReq ? 'request' : 'reply'}${p.isEchoReq && !isStdPing(p.payload) ? ' ' + badge('warn', 'odd') : ''}</td><td class="mono" style="font-size:12px">${esc(p.src)} → ${esc(p.dst)}</td><td>${p.icmpId}/${p.icmpSeq}</td><td>${p.payload.length}</td><td class="mono" style="font-size:12px">${hlFlags(safeText(p.payload, 120))}</td></tr>`).join('')}</tbody></table></div>`;
+  wireFrag(uniq, auto);
+};
+
+/* ---- credentials ---- */
+function wireFrag(uniq, auto){
+  const sel = new Set(auto ? auto.used : []);
+  $('#frag').innerHTML = uniq.map((u, i) => `<label class="chip ${sel.has(i) ? 'on' : ''}" style="font-family:ui-monospace,monospace"><input type="checkbox" data-i="${i}" ${sel.has(i) ? 'checked' : ''} style="display:none">${esc(safeText(te.encode(u), 60))}</label>`).join('');
+  const upd = () => { const t = $$('#frag input').filter(x => x.checked).map(x => uniq[+x.dataset.i]).join(''); const st = t.search(/[A-Za-z0-9_]{2,24}\{/); const out = auto && st >= 0 ? t.slice(st, t.includes('}') ? t.indexOf('}', st) + 1 : undefined) : t; $('#fragOut').innerHTML = hlFlags(out) || '(nothing selected)'; $('#fragCp').onclick = e => copyText(out, e.target); };
+  $$('#frag input').forEach(x => x.onchange = () => { x.parentElement.classList.toggle('on', x.checked); upd(); }); upd();
+}
+VIEWS.creds = () => {
+  const c = get('creds', () => findCreds(P, FLOWS));
+  $('#pane').innerHTML = c.length ? `<div class="tablewrap"><table><thead><tr><th>Protocol</th><th>Client</th><th>Server</th><th>User</th><th>Password / secret</th><th>Detail</th></tr></thead><tbody>
+    ${c.map(x => `<tr><td>${badge('bad', x.proto)}</td><td class="mono">${esc(x.cli)}</td><td class="mono">${esc(x.srv)}</td><td class="mono"><b>${esc(x.user || '')}</b></td><td class="mono"><b>${hlFlags(x.pass || '')}</b></td><td class="mono" style="font-size:12px;white-space:pre-wrap">${hlFlags(x.extra || '')}</td></tr>`).join('')}</tbody></table></div>`
+    : '<p class="muted" style="margin-top:0">No cleartext credentials found (FTP, Telnet, HTTP Basic/forms, SMTP/POP3/IMAP auth, SNMP communities).</p>';
+};
+
+/* ---- pattern search ---- */
+function decodeVariants(s){
+  const out = [['as-is', s]], t = s.replace(/\s+/g, '');
+  const tryB = (n, f) => { try { const b = f(); if (b && b.length && printableRatio(b) > 0.8) out.push([n, asLatin(b)]); } catch {} };
+  if (/^[A-Za-z0-9+/=_-]{8,}$/.test(t)) tryB('base64', () => b64ToBytes(t));
+  if (/^[A-Z2-7=]{8,}$/i.test(t)) tryB('base32', () => b32ToBytes(t));
+  if (/^[0-9a-f]{8,}$/i.test(t) && t.length % 2 === 0) tryB('hex', () => hexToBytes(t));
+  out.push(['reversed', [...s].reverse().join('')], ['rot13', rot(s, 13)]);
+  return out;
+}
+async function flagHunt(){
+  const hits = [], seen = new Set();
+  const check = (source, text, rank = 1) => { let plain = false;
+    for (const [how, v] of decodeVariants(text)) { if (how !== 'as-is' && plain) break;
+      for (const f of findFlags(v)) { plain ||= how === 'as-is'; const k = f + '|' + source; if (seen.has(k)) continue; seen.add(k); hits.push({ flag: f, rank, source: how === 'as-is' ? source : `${source} (${how})` }); } } };
+  // 0) fragment assembly over short payload sequences (ICMP and per-flow), ranked first
+  const icReq = P.filter(p => p.isEchoReq && p.payload?.length).map(p => asLatin(p.payload));
+  const asm = assembleFragments(icReq); if (asm) check('ICMP fragments (auto-assembled, filler skipped)', asm.text, 0);
+  for (const f of FLOWS) { const pcs = f.pkts.filter(p => p.payload?.length && p.payload.length <= 64 && printableRatio(p.payload) === 1).map(p => asLatin(p.payload)); if (pcs.length >= 2) { const a = assembleFragments(pcs); if (a) check(`${f.proto} fragments ${f.cli}→${f.srv}:${f.sport} (auto-assembled)`, a.text, 0); } }
+  // 1) single packets
+  for (const p of P) if (p.payload?.length) { const s = asLatin(p.payload); if (findFlags(s).length) check(`packet #${p.no} payload`, s); }
+  // 2) reassembled streams (both directions)
+  for (const f of FLOWS) { const c = asLatin(reassemble(f, true)), sv = asLatin(reassemble(f, false)); if (c.length < 2e6) check(`stream ${f.cli}:${f.cport}→${f.srv}:${f.sport} (client)`, c); if (sv.length < 2e6) check(`stream ${f.srv}:${f.sport}→${f.cli} (server)`, sv); }
+  // 3) ICMP payload concatenations
+  const ic = analyzeICMP(P);
+  if (ic.req.length) { check('ICMP echo payloads concatenated', ic.req.map(p => asLatin(p.payload)).join('')); check('ICMP non-standard payloads concatenated', ic.odd.map(p => asLatin(p.payload)).join(''));
+    check('ICMP unique payloads concatenated', [...new Set(ic.req.map(p => asLatin(p.payload)))].join(''));
+    for (const k of ['icmpSeq', 'icmpId', 'ttl', 'ipid']) check(`ICMP ${k} low bytes`, ic.req.map(p => String.fromCharCode((p[k] ?? 0) & 255)).join('')); }
+  // 4) DNS names: first labels / subdomains concatenated per parent domain
+  const qs = P.filter(p => p.dns && !p.dns.qr && p.dns.qname);
+  if (qs.length) {
+    const uniq = [...new Set(qs.map(p => p.dns.qname))];
+    check('DNS first labels concatenated', uniq.map(n => n.split('.')[0]).join(''));
+    const byParent = {}; for (const n of uniq) { const r = regDomain(n); const sub = n.replace(/\.$/, '').slice(0, -(r.length + 1)); if (sub) (byParent[r] ||= []).push(sub.replace(/\./g, '')); }
+    for (const [r, subs] of Object.entries(byParent)) if (subs.length > 1) check(`DNS subdomains of ${r} concatenated`, subs.join(''));
+    // first labels grouped by immediate parent (e.g. <chunk>.exfil.evil.com)
+    const byImm = {}; for (const n of uniq) { const parts = n.replace(/\.$/, '').split('.'); if (parts.length >= 3) (byImm[parts.slice(1).join('.')] ||= []).push(parts[0]); }
+    for (const [par, labels] of Object.entries(byImm)) if (labels.length > 1) check(`DNS chunks under ${par} concatenated`, labels.join(''));
+    const txt = P.filter(p => p.dns?.qr).flatMap(p => p.dns.answers.filter(a => a.type === 'TXT').map(a => a.data));
+    if (txt.length) check('DNS TXT answers concatenated', txt.join(''));
+  }
+  // 5) header-field covert channels per src→dst pair (IP ID, TTL, TCP/UDP source port, window)
+  const pairs = {}; for (const p of P) if (p.src) (pairs[p.src + '>' + p.dst] ||= []).push(p);
+  for (const [k, list] of Object.entries(pairs)) if (list.length >= 6 && list.length <= 5000) for (const [fld, fn] of [['IP ID low byte', p => p.ipid & 255], ['IP ID high byte', p => p.ipid >> 8], ['TTL', p => p.ttl], ['src port low byte', p => p.sport & 255], ['TCP window low byte', p => p.win & 255]]) {
+    const s = list.map(p => { const v = fn(p); return v == null || isNaN(v) ? '' : String.fromCharCode(v); }).join('');
+    if (s.length >= 6 && printableRatio(te.encode(s)) > 0.9) check(`${fld} sequence ${k.replace('>', ' → ')}`, s);
+  }
+  // 6) HTTP bodies (decompressed)
+  for (const o of await get('httpobjs', () => allHttpObjects())) if (o.body?.length) check(`HTTP body ${o.host || ''}${o.uri || ''}`, asLatin(o.body));
+  return hits.sort((a, b) => a.rank - b.rank);
+}
+VIEWS.flags = async () => {
+  CACHE.flaghunt = null; const hits = await (CACHE.flaghunt = flagHunt());
+  $('#pane').innerHTML = `<p class="muted" style="margin-top:0">Searched single packets, reassembled TCP/UDP streams, concatenated ICMP payloads and header fields, DNS labels/subdomains/TXT, IP-ID/TTL/port covert channels and HTTP bodies — each also as base64 / base32 / hex / reversed / ROT13. Pattern: <span class="mono">${esc(flagRegex().source)}</span> (change it in the box above and press Pattern search again).</p>
+    ${hits.length ? `<div class="tablewrap"><table><thead><tr><th>Match</th><th>Found in</th><th></th></tr></thead><tbody>${hits.map((h, i) => `<tr><td class="mono"><mark>${esc(h.flag)}</mark></td><td>${esc(h.source)}</td><td><button data-c="${i}" style="padding:2px 8px;font-size:12px">Copy</button></td></tr>`).join('')}</tbody></table></div>`
+      : '<div class="card">No pattern match. Data may be split across packets with filler between them (check the ICMP / Follow stream views), encrypted, or need a different regex.</div>'}
+    <h2 style="margin-top:16px">Search all payload bytes</h2><div class="row" style="margin-top:0"><input type="text" id="gs" class="grow mono" placeholder="text or /regex/"><button id="gsb" class="primary">Search</button></div><div id="gso"></div>`;
+  $$('[data-c]').forEach(b => b.onclick = () => copyText(hits[+b.dataset.c].flag, b));
+  $('#gsb').onclick = () => { const q = $('#gs').value; if (!q) return; let re; try { re = q.startsWith('/') && q.lastIndexOf('/') > 0 ? new RegExp(q.slice(1, q.lastIndexOf('/')), q.slice(q.lastIndexOf('/') + 1) || 'i') : new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'); } catch (e) { $('#gso').innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+    const res = P.filter(p => p.payload?.length && re.test(asLatin(p.payload))).slice(0, 500);
+    $('#gso').innerHTML = `<p class="muted">${res.length} packet(s)</p><table><tbody>${res.map(p => `<tr><td>#${p.no}</td><td class="mono" style="font-size:12px">${esc(p.src)} → ${esc(p.dst)}</td><td class="mono" style="font-size:12px">${esc(safeText(p.payload, 160))}</td></tr>`).join('')}</tbody></table>`; };
+  $('#gs').addEventListener('keydown', e => e.key === 'Enter' && $('#gsb').click());
+};
+
+/* ---------------- wiring ---------------- */
+$('#file').onchange = e => { const f = e.target.files[0]; if (f) load(f); e.target.value = ''; };
+const dz = $('#drop');
+['dragover', 'dragenter'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.style.borderColor = 'var(--accent)'; }));
+['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.style.borderColor = ''; }));
+dz.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) load(f); });
+document.addEventListener('flagchange', () => { if (P.length) { CACHE.flaghunt = null; renderTabs(); show('summary'); } });
+</script>
