@@ -40,10 +40,16 @@
 #boxSel .selnote{flex:1;min-width:140px;max-width:280px;padding:5px 8px}
 #boxSel button:not(.sw){padding:5px 10px;font-size:13px}
 #boxes{position:relative;height:clamp(240px,46vw,560px);margin-top:10px;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--panel);user-select:none}
-#boxes .bx{position:absolute;display:flex;flex-direction:column;gap:1px;padding:4px 6px;border:1px solid var(--panel);background:var(--accent-soft);color:var(--text);font-size:12px;line-height:1.3;overflow:hidden;cursor:pointer}
-#boxes .bx.free{background:repeating-linear-gradient(135deg,var(--code-bg) 0 6px,var(--border) 6px 7px)}
-#boxes .bx:hover{box-shadow:inset 0 0 0 2px var(--muted)}
-#boxes .bx.on{box-shadow:inset 0 0 0 2px var(--accent)}
+/* subnet hues: the dataviz reference categorical palette, stepped per theme */
+:root{--h-blue:#2a78d6;--h-orange:#eb6834;--h-aqua:#1baf7a;--h-yellow:#eda100;--h-magenta:#e87ba4;--h-green:#008300;--h-violet:#4a3aa7;--h-red:#e34948;--h-gray:#8a8f98}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--h-blue:#3987e5;--h-orange:#d95926;--h-aqua:#199e70;--h-yellow:#c98500;--h-magenta:#d55181;--h-green:#008300;--h-violet:#9085e9;--h-red:#e66767;--h-gray:#6b7280}}
+:root[data-theme="dark"]{--h-blue:#3987e5;--h-orange:#d95926;--h-aqua:#199e70;--h-yellow:#c98500;--h-magenta:#d55181;--h-green:#008300;--h-violet:#9085e9;--h-red:#e66767;--h-gray:#6b7280}
+#vt i.hue{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:7px;vertical-align:-1px}
+#boxes .bx{--c:var(--h-gray);position:absolute;display:flex;flex-direction:column;gap:1px;padding:7px 7px 4px;border:1px solid var(--panel);background:color-mix(in srgb,var(--c) 34%,var(--panel));box-shadow:inset 0 3px 0 var(--c);color:var(--text);font-size:12px;line-height:1.3;overflow:hidden;cursor:pointer}
+#boxes .bx.free{background:color-mix(in srgb,var(--c) 22%,var(--panel))}
+#boxes .bx span{font-weight:600}
+#boxes .bx:hover{box-shadow:inset 0 3px 0 var(--c),inset 0 0 0 1px var(--c)}
+#boxes .bx.on{box-shadow:inset 0 3px 0 var(--c),inset 0 0 0 2px var(--text)}
 #boxes .bx b,#boxes .bx span,#boxes .bx small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #boxes .bx b{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
 #boxes .bx small{color:var(--muted);font-size:11px}
@@ -70,17 +76,28 @@
   <div id="boxes"></div>
   <div id="map" hidden></div>
   <div class="tablewrap" style="margin-top:12px"><table id="vt"></table></div>
-  <p class="note">Click a <span style="color:#e8765a;font-weight:600">split</span> cell to divide a subnet in two; click a <span style="color:#4a95c7;font-weight:600">join</span> cell to merge everything under it. In the box view each split halves its box, so area matches address share — double-click a box to split it. Notes, colors and the layout are kept in the page URL.</p>
+  <p class="note">Click a <span style="color:#e8765a;font-weight:600">split</span> cell to divide a subnet in two; click a <span style="color:#4a95c7;font-weight:600">join</span> cell to merge everything under it. In the box view each split halves its box, so area matches address share, and boxes follow address order (each block's top half before its bottom, left before right) — double-click one to split it. Each subnet's color chip in the table matches its box. Notes, colors and the layout are kept in the page URL.</p>
 </section>
 
 <script>
-const COLORS = [null, '#f6c9c0', '#fbe2a8', '#cfe9b8', '#bfe3e0', '#c4d7f2', '#dac8f0', '#f2c6de', '#d9d9d9'];
-const COLORS_DARK = [null, '#5a2f28', '#5a4a1e', '#34502a', '#244a47', '#283f63', '#43305e', '#5a2b45', '#3d3d3d'];
+// colors you pick (the index is what the share link stores) and the automatic palette — both are --h-* hues
+const COLORS = [null, 'red', 'yellow', 'green', 'aqua', 'blue', 'violet', 'magenta', 'gray'];
+const AUTO = ['blue', 'orange', 'aqua', 'yellow', 'magenta', 'green', 'violet', 'red'];   // CVD-checked neighbour order
 const MAX_LEAVES = 2048;
 let root = null;
 
-const dark = () => { const t = document.documentElement.dataset.theme; return t ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches; };
-const colorOf = i => i ? (dark() ? COLORS_DARK : COLORS)[i] : null;
+const tint = (h, pct) => `color-mix(in srgb, var(--h-${h}) ${pct}%, var(--panel))`;
+const colorOf = i => i ? tint(COLORS[i], 30) : null;
+// every subnet has a hue: your pick, else the next palette slot in address order — skipping a hue its neighbour
+// already uses — so consecutive subnets always differ. Computed per render; i is the row (address-order) index.
+let HUES = [];
+function assignHues(rows){
+  HUES = rows.map(({ n }) => n.color ? COLORS[n.color] : null);
+  HUES.forEach((h, i) => { if (h) return;
+    for (let k = 0; k < AUTO.length && !HUES[i]; k++) { const c = AUTO[(i + k) % AUTO.length]; if (c !== HUES[i - 1] && c !== HUES[i + 1]) HUES[i] = c; }
+    HUES[i] ||= AUTO[i % AUTO.length]; });
+}
+const hueOf = (n, i) => HUES[i] || 'gray';
 const mk = (net, p, v) => ({ net, p, v, kids: null, note: '', color: 0 });
 function split(n){ const half = blockSize(n.p + 1, n.v); n.kids = [mk(n.net, n.p + 1, n.v), mk(n.net + half, n.p + 1, n.v)]; n.kids[0].note = n.note; n.kids[0].color = n.color; n.note = ''; n.color = 0; }
 function join(n){ const first = leavesOf(n)[0]; n.note = first?.note || ''; n.color = first?.color || 0; n.kids = null; }
@@ -123,13 +140,14 @@ function save(){ clearTimeout(saveT); saveT = setTimeout(() => {
 function render(){
   const rows = [], walk = (n, anc) => { if (!n.kids) { rows.push({ n, anc }); return; } n.kids.forEach(k => walk(k, [...anc, n])); };
   walk(root, []);
+  assignHues(rows);
   const maxDepth = Math.max(...rows.map(r => r.n.p - root.p));
   const v = root.v, span = n => leavesOf(n).length;
   let html = `<thead><tr><th>Subnet address</th><th>Range of addresses</th><th>Usable IPs</th><th>Hosts</th><th>Note</th><th></th><th class="sjh" colspan="${maxDepth + 1}"><span class="s">Split</span>/<span class="j">Join</span></th></tr></thead><tbody>`;
   rows.forEach(({ n, anc }, i) => {
     const last = n.net + blockSize(n.p, v) - 1n, [u0, u1] = usableRange(n.net, n.p, v), bg = colorOf(n.color);
     const td = bg ? ` style="background:${bg}"` : '';
-    html += `<tr data-i="${i}"><td class="mono"${td}><b>${cidrStr(n.net, n.p, v)}</b></td><td class="mono"${td}>${fmtIP(n.net, v)} – ${fmtIP(last, v)}</td><td class="mono"${td}>${fmtIP(u0, v)} – ${fmtIP(u1, v)}</td><td${td}>${usableHosts(n.p, v).toLocaleString()}</td>
+    html += `<tr data-i="${i}"><td class="mono"${td}><i class="hue" style="background:var(--h-${hueOf(n, i)})"></i><b>${cidrStr(n.net, n.p, v)}</b></td><td class="mono"${td}>${fmtIP(n.net, v)} – ${fmtIP(last, v)}</td><td class="mono"${td}>${fmtIP(u0, v)} – ${fmtIP(u1, v)}</td><td${td}>${usableHosts(n.p, v).toLocaleString()}</td>
       <td class="note"${td}><input class="note" data-i="${i}" value="${esc(n.note)}" placeholder="" spellcheck="false"></td><td${td}><button class="sw" data-c="${i}" title="Change color" style="background:${bg || 'var(--panel)'}"></button></td>
       <td class="sj split${n.p >= bitsOf(v) ? ' max' : ''}" colspan="${maxDepth - (n.p - root.p) + 1}" data-split="${i}" title="${n.p >= bitsOf(v) ? 'Single address' : `Split into two /${n.p + 1}`}"><span>/${n.p}</span></td>`;
     // ancestors whose first leaf is this row get a join cell spanning their leaves
@@ -145,7 +163,7 @@ function render(){
 }
 // block map: width proportional to address share
 function renderMap(){
-  $('#map').innerHTML = _rows.map(({ n }, i) => { const frac = Math.pow(2, root.p - n.p), bg = colorOf(n.color) || (i % 2 ? 'var(--code-bg)' : 'var(--accent-soft)');
+  $('#map').innerHTML = _rows.map(({ n }, i) => { const frac = Math.pow(2, root.p - n.p), bg = tint(hueOf(n, i), n.note || n.color ? 34 : 22);
     return `<div data-m="${i}" style="flex:${frac} 1 0;background:${bg}" title="${esc(cidrStr(n.net, n.p, n.v) + (n.note ? ' — ' + n.note : ''))}">${frac > 0.07 ? esc(n.note || '/' + n.p) : ''}</div>`; }).join('');
 }
 
@@ -160,16 +178,16 @@ function renderBoxes(){
   const idx = new Map(_rows.map((r, i) => [r.n, i])), out = [];
   const lay = (n, x, y, w, h) => {
     if (!n.kids) { out.push([n, x, y, w, h]); return; }
-    const vert = w >= h;   // cut across the longer side so boxes stay between 1:2 and 2:1
+    const vert = (n.p - root.p) % 2 === 1;   // top/bottom, then left/right: boxes read in address order, like text
     lay(n.kids[0], x, y, vert ? w / 2 : w, vert ? h : h / 2);
     lay(n.kids[1], vert ? x + w / 2 : x, vert ? y : y + h / 2, vert ? w / 2 : w, vert ? h : h / 2);
   };
   lay(root, 0, 0, W, H);
   el.innerHTML = out.map(([n, x, y, w, h]) => {
-    const bg = colorOf(n.color), cidr = cidrStr(n.net, n.p, n.v), note = n.note ? `<span>${esc(n.note)}</span>` : '';
+    const cidr = cidrStr(n.net, n.p, n.v), note = n.note ? `<span>${esc(n.note)}</span>` : '';
     const label = w >= 120 && h >= 52 ? `<b>${cidr}</b>${note}<small>${hostsTxt(n)}</small>` : w >= 56 && h >= 30 ? `<b>/${n.p}</b>${note}` : w >= 30 && h >= 18 ? `<b>/${n.p}</b>` : '';
     const tip = `${cidr}\n${fmtIP(n.net, n.v)} – ${fmtIP(n.net + blockSize(n.p, n.v) - 1n, n.v)}\n${hostsTxt(n)}${n.note ? '\n' + n.note : ''}`;
-    return `<div class="bx${!bg && !n.note ? ' free' : ''}${n === selNode ? ' on' : ''}" data-b="${idx.get(n)}" style="left:${pc(x, W)};top:${pc(y, H)};width:${pc(w, W)};height:${pc(h, H)}${bg ? `;background:${bg}` : ''}" title="${esc(tip)}">${label}</div>`;
+    return `<div class="bx${!n.color && !n.note ? ' free' : ''}${n === selNode ? ' on' : ''}" data-b="${idx.get(n)}" style="--c:var(--h-${hueOf(n, idx.get(n))});left:${pc(x, W)};top:${pc(y, H)};width:${pc(w, W)};height:${pc(h, H)}" title="${esc(tip)}">${label}</div>`;
   }).join('');
 }
 function select(n){
@@ -178,7 +196,7 @@ function select(n){
   $$('#boxes .bx.on').forEach(b => b.classList.remove('on')); $$('#vt tr.hl').forEach(x => x.classList.remove('hl'));
   if (i >= 0) { $(`#boxes [data-b="${i}"]`)?.classList.add('on'); $(`#vt tr[data-i="${i}"]`)?.classList.add('hl'); }
   const r = _rows[i];
-  if (!r) { $('#boxSel').innerHTML = '<span class="muted">Click a subnet to select it · double-click a box to split it · hatched boxes have no note yet.</span>'; return; }
+  if (!r) { $('#boxSel').innerHTML = '<span class="muted">Click a subnet to select it · double-click a box to split it · lighter boxes have no note yet.</span>'; return; }
   const v = root.v, parent = r.anc.at(-1), bg = colorOf(n.color);
   $('#boxSel').innerHTML = `<b class="mono">${cidrStr(n.net, n.p, v)}</b><span class="muted mono">${fmtIP(n.net, v)} – ${fmtIP(n.net + blockSize(n.p, v) - 1n, v)}</span><span class="muted">${hostsTxt(n)}</span>
     <input type="text" class="selnote" value="${esc(n.note)}" placeholder="Note…" spellcheck="false" aria-label="Note for ${esc(cidrStr(n.net, n.p, v))}"><button class="sw" data-sa="color" title="Change color" style="background:${bg || 'var(--panel)'}"></button>
