@@ -22,7 +22,9 @@ TEMPLATE = """<!doctype html>
   </header>
 <script src="../../assets/common.js"></script>
 <script src="../../assets/history.js"></script>
+<script src="../../assets/consent.js"></script>
 {extra}{body}
+<footer>Free and open source under the <a href="https://github.com/Kintoyyy/netops-toolkit/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a> · provided as is, without warranty · <a href="../../disclaimer/">Disclaimer</a></footer>
 </div>
 </body>
 </html>

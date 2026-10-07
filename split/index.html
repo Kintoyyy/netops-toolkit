@@ -66,12 +66,14 @@ body{display:flex;flex-direction:column;overflow:hidden}
   <button id="add" title="Add a pane (up to 6)">+ Add pane</button>
   <label class="chk" title="Clicking a link to another tool (an IP, ASN, domain…) loads it in the next pane instead of replacing this one"><input type="checkbox" id="linkNext" checked> Open tool links in the next pane</label>
   <span style="flex:1"></span>
+  <a href="../disclaimer/" class="muted" style="font-size:13px">Disclaimer</a>
   <button id="themeBtn" title="Toggle theme"></button>
 </div>
 <main class="ws" id="ws"></main>
 
 <script src="../assets/common.js"></script>
 <script src="../assets/history.js"></script>
+<script src="../assets/consent.js"></script>
 <script src="../assets/tools.js"></script>
 <script>
 const MAX = 6;
@@ -85,7 +87,7 @@ const I = { hist: ico('<path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5M
 // Panes show the tool without its own page chrome: the pane header names it, owns its History button and the bar owns the theme.
 // The header collapses to zero height but stays in place, so the tool's History menu still opens at the pane's top-right.
 const EMBED_CSS = `.wrap{max-width:none!important;padding:0 14px 40px!important}
-.back,.split-link,#themeBtn,#nhBtn{display:none!important}
+.back,.split-link,#themeBtn,#nhBtn,body>.wrap>footer{display:none!important}
 header.top>div:first-child,body>.wrap>header>div:first-child{display:none!important}
 header.top,body>.wrap>header{height:0;justify-content:flex-end!important}`;
 const S = { layout: 'cols', linkNext: true, max: null };

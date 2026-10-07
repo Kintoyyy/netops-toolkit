@@ -16,6 +16,7 @@
   </header>
 <script src="../../assets/common.js"></script>
 <script src="../../assets/history.js"></script>
+<script src="../../assets/consent.js"></script>
 <section class="panel">
   <label class="small" for="raw">Domains or URLs — one per line, or comma / space separated. Bare domains are checked over https://. Lines starting with # are ignored.</label>
   <textarea id="raw" spellcheck="false" placeholder="example.com&#10;https://www.example.org/login&#10;api.example.net:8443&#10;shop[.]example[.]io"></textarea>
@@ -225,6 +226,7 @@ $('#stop').onclick = () => { stopFlag = true; $('#stop').disabled = true; };
 if (getParam('q')) { $('#raw').value = getParam('q').split(',').join('\n'); $('#raw').dispatchEvent(new Event('input')); run(); }
 </script>
 
+<footer>Free and open source under the <a href="https://github.com/Kintoyyy/netops-toolkit/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a> · provided as is, without warranty · <a href="../../disclaimer/">Disclaimer</a></footer>
 </div>
 </body>
 </html>

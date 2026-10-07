@@ -35,6 +35,8 @@ A browser-based toolbox for ISP operators, network engineers, DNS admins and sec
 
 **Offline** tools never send data anywhere. **Online** tools call public APIs (Cloudflare/Google DoH, rdap.org, RIPEstat, ipify, Cloudflare speed test, crt.sh, CertSpotter, ipwho.is, maclookup.app, PeeringDB) directly from the visitor's browser.
 
+On a visitor's first visit, a short notice asks them to accept the [disclaimer](disclaimer/) (provided as is, no liability, authorized use only). Acceptance is stored in their browser; bump `VERSION` in `assets/consent.js` to ask again after a material change.
+
 ## Deploy
 Push this folder to a repo → Settings → Pages → Deploy from branch → `main` / root.
 
@@ -42,7 +44,8 @@ Push this folder to a repo → Settings → Pages → Deploy from branch → `ma
 ```
 index.html          homepage
 split/              split view — several tools side by side in resizable panes
-assets/             tools.js (tool registry: the TOOLS array), style.css, common.js (theme, DoH, IP helpers), history.js (recent tools, saved inputs, History menu), netcalc.js (prefix math), decoders.js (encodings, scoring, pattern highlighting)
+disclaimer/         terms of use (as is, no liability) with the accept / withdraw control
+assets/             tools.js (tool registry: the TOOLS array), style.css, common.js (theme, DoH, IP helpers), history.js (recent tools, saved inputs, History menu), consent.js (first-visit disclaimer notice), netcalc.js (prefix math), decoders.js (encodings, scoring, pattern highlighting)
 src/<slug>.html     tool source fragments
 build.py            wraps src/*.html into tools/<slug>/index.html
 tools/<slug>/       built pages (commit these — Pages serves them)
@@ -54,3 +57,6 @@ tools/<slug>/       built pages (commit these — Pages serves them)
 3. Add an entry to `TOOLS` in `assets/tools.js` (the homepage and split view both read it).
 
 Tools accept `?q=` in the URL, so they can link to each other (e.g. `tools/domain-intel/?q=8.8.8.8`).
+
+## License
+[MIT](LICENSE) — free for anyone to use, modify and share, provided as is without warranty. See the [disclaimer](disclaimer/).

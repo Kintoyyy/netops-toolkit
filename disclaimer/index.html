@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en" data-consent-page>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Disclaimer · NetOps Toolkit</title>
+<meta name="description" content="Terms of use for NetOps Toolkit: free and open source under the MIT License, provided as is, with no liability for its use.">
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+.legal,.accept{max-width:780px}
+.legal h2{font-size:16px;margin:22px 0 6px}
+.legal h2:first-child{margin-top:0}
+.legal p,.legal li{font-size:14.5px;line-height:1.65}
+.legal p{margin:0 0 10px}
+.legal ul{margin:0 0 10px;padding-left:20px}
+.accept{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="../">← All tools</a>
+  <header class="top">
+    <div><h1>Disclaimer</h1><p class="sub">Terms of use for NetOps Toolkit · last updated 7 October 2026</p></div>
+    <button id="themeBtn" title="Toggle theme"></button>
+  </header>
+<script src="../assets/common.js"></script>
+<script src="../assets/consent.js"></script>
+
+  <section class="panel accept" id="consent"></section>
+
+  <section class="panel legal">
+    <h2>Free and open source</h2>
+    <p>NetOps Toolkit is free to use, with no sign-up, ads or tracking. It is open source under the <a href="https://github.com/Kintoyyy/netops-toolkit/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>, so anyone may use, copy, modify and share it, including commercially, as long as the copyright and license notice are kept. The source code is on <a href="https://github.com/Kintoyyy/netops-toolkit" target="_blank" rel="noopener">GitHub</a>.</p>
+
+    <h2>Provided “as is”</h2>
+    <p>The toolkit is provided “as is” and “as available”, without warranty of any kind, express or implied, including warranties of accuracy, reliability, merchantability, fitness for a particular purpose and non-infringement. Calculations, lookups, decoders, simulations and generated configurations may contain errors, be incomplete or be out of date.</p>
+
+    <h2>No liability</h2>
+    <p>To the fullest extent permitted by law, the authors and contributors are not liable for any direct, indirect, incidental, special, consequential or punitive damages arising from the use of, or inability to use, this toolkit or anything it produces. That includes, among other things, network outages, misconfiguration, data loss, security incidents, lost revenue and claims by third parties, even if the possibility of such damage was known.</p>
+
+    <h2>Your responsibility</h2>
+    <p>You decide how to use what the tools produce. Review and test results before relying on them, especially generated router configuration, subnet plans and queue or burst settings: try them in a lab or a maintenance window first, and keep backups of anything you change.</p>
+
+    <h2>Lawful and authorized use</h2>
+    <p>Use the security, OSINT and analysis tools (such as PCAP analysis, IOC extraction, domain and IP lookups, subdomain discovery and the decoding and cipher tools) only on systems, networks and data you own or are explicitly authorized to analyze, and in line with the laws, contracts and policies that apply to you. Don't use the toolkit to harm, disrupt or gain unauthorized access to anyone's systems.</p>
+
+    <h2>Third-party services</h2>
+    <p>Online tools send the values you look up straight from your browser to public services, including Cloudflare and Google DNS-over-HTTPS, rdap.org and the regional internet registries, RIPEstat, PeeringDB, ipwho.is, ipapi.co, crt.sh, CertSpotter, ipify and maclookup.app. Each tool says which services it uses. Those services have their own terms and privacy policies, may limit or change access without notice, and their data may be incomplete or wrong. NetOps Toolkit has no control over them.</p>
+
+    <h2>Privacy</h2>
+    <p>There is no backend and no analytics. Offline tools process everything inside your browser. Recently used tools, saved inputs, history, split-view layouts and your acceptance of this disclaimer are stored only in your browser's local storage on this device. You can turn history off or clear it from any tool's History menu.</p>
+
+    <h2>Trademarks</h2>
+    <p>MikroTik, RouterOS, Cisco, Juniper, Wireshark and other product names are trademarks of their respective owners. NetOps Toolkit is an independent project and is not affiliated with, sponsored or endorsed by any of them.</p>
+
+    <h2>Changes</h2>
+    <p>This disclaimer may be updated. The date at the top shows the current version; if it changes materially you'll be asked to accept it again. Continuing to use the toolkit means you accept the version in force at the time.</p>
+  </section>
+
+  <footer>NetOps Toolkit · free and open source under the <a href="https://github.com/Kintoyyy/netops-toolkit/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a></footer>
+</div>
+<script>
+function renderConsent(){
+  const c = window.NetopsConsent?.accepted();
+  $('#consent').innerHTML = c
+    ? `<span class="b b-ok">Accepted</span><span>You accepted this disclaimer on ${esc(new Date(c.t).toLocaleString())}.</span><span style="flex:1"></span><button id="withdraw">Withdraw</button>`
+    : `<span class="b b-warn">Not accepted</span><span>Please read the terms below. You'll need to accept them to use the toolkit.</span><span style="flex:1"></span><button class="primary" id="acceptBtn">I understand and accept</button>`;
+  $('#acceptBtn')?.addEventListener('click', () => NetopsConsent.accept());
+  $('#withdraw')?.addEventListener('click', () => NetopsConsent.withdraw());
+}
+document.addEventListener('netops-consent', renderConsent);
+renderConsent();
+</script>
+</body>
+</html>

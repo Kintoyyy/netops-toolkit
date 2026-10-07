@@ -16,6 +16,7 @@
   </header>
 <script src="../../assets/common.js"></script>
 <script src="../../assets/history.js"></script>
+<script src="../../assets/consent.js"></script>
 <section class="panel">
   <label class="small" for="raw">Paste text (reports, logs, emails, chat…)</label>
   <textarea id="raw" spellcheck="false" style="min-height:200px"></textarea>
@@ -127,6 +128,7 @@ $('#optPriv').onchange = $('#optFiles').onchange = () => $('#raw').value && extr
 $('#file').onchange = async e => { const f = e.target.files[0]; if (!f) return; $('#raw').value = await f.text(); e.target.value = ''; extract(); };
 </script>
 
+<footer>Free and open source under the <a href="https://github.com/Kintoyyy/netops-toolkit/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a> · provided as is, without warranty · <a href="../../disclaimer/">Disclaimer</a></footer>
 </div>
 </body>
 </html>

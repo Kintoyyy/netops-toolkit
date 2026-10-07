@@ -16,6 +16,7 @@
   </header>
 <script src="../../assets/common.js"></script>
 <script src="../../assets/history.js"></script>
+<script src="../../assets/consent.js"></script>
 <section class="panel">
   <label class="small" for="raw">Input — any mix of hosts lines, ||adblock^ rules, dnsmasq/unbound/RPZ entries, URLs, plain domains, IPs or CIDRs</label>
   <textarea id="raw" spellcheck="false" style="min-height:180px" placeholder="0.0.0.0 ads.example.com&#10;||tracker.example.net^&#10;https://phish.example.org/login&#10;malware.example.top&#10;203.0.113.0/24"></textarea>
@@ -148,6 +149,7 @@ $('#file').onchange = async e => { const f = e.target.files[0]; if (!f) return; 
 convert();
 </script>
 
+<footer>Free and open source under the <a href="https://github.com/Kintoyyy/netops-toolkit/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a> · provided as is, without warranty · <a href="../../disclaimer/">Disclaimer</a></footer>
 </div>
 </body>
 </html>
