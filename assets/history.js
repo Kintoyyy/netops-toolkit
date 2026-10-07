@@ -21,7 +21,8 @@
   window.NetopsHistory = {
     recent: () => get('recent', []), entries: s => get('hist:' + s, []), ago, enabled,
     clearRecent: () => del('recent'),
-    state: v => v === undefined ? get('state:' + slug, null) : enabled() && slug && put('state:' + slug, v),   // free-form per-tool state
+    kv: (k, v) => v === undefined ? get(k, null) : enabled() && put(k, v),   // free-form state, honours the remember switch
+    state: v => slug ? window.NetopsHistory.kv('state:' + slug, v) : null,   // per-tool state
   };
   if (!slug) return;
 

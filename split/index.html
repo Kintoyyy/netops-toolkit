@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Split View · NetOps Toolkit</title>
+<meta name="description" content="Use several NetOps Toolkit tools side by side — columns, rows or a grid, with resizable panes.">
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+html,body{height:100%}
+body{display:flex;flex-direction:column;overflow:hidden}
+.bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;border-bottom:1px solid var(--border);background:var(--panel)}
+.bar .back{margin:0 6px 0 0}
+.bar h1{font-size:15px;margin:0 8px 0 0}
+.bar button{padding:5px 10px;font-size:13px}
+.seg{display:inline-flex;border:1px solid var(--border);border-radius:7px;overflow:hidden}
+.seg button{border:0;border-radius:0;background:var(--panel);color:var(--muted)}
+.seg button+button{border-left:1px solid var(--border)}
+.seg button.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.ws{flex:1;min-height:0;display:flex;padding:8px}
+.ws.rows{flex-direction:column}
+.ws.grid{display:grid;gap:8px}
+.tile{display:flex;flex-direction:column;flex:1 1 0;min-width:0;min-height:0;background:var(--panel);border:1px solid var(--border);border-radius:10px;overflow:hidden;transition:box-shadow .2s}
+.tile.flash{box-shadow:0 0 0 2px var(--accent)}
+.phead{display:flex;align-items:center;gap:2px;padding:4px 6px;border-bottom:1px solid var(--border);background:var(--code-bg)}
+.phead .ic{display:grid;place-items:center;width:24px;height:24px;flex:none;color:var(--accent)}
+.phead .ic svg{width:16px;height:16px}
+.phead select{flex:0 1 auto;margin-right:auto;min-width:0;max-width:100%;padding:3px 6px;font-size:13px;font-weight:600;background:transparent;border-color:transparent;cursor:pointer}
+.phead select:hover,.phead select:focus{border-color:var(--border)}
+.pbtn{display:inline-grid;place-items:center;flex:none;width:28px;height:26px;padding:0;background:none;border:1px solid transparent;border-radius:6px;color:var(--muted);cursor:pointer}
+.pbtn:hover{color:var(--text);border-color:var(--border);filter:none}
+.pbody{position:relative;flex:1;min-height:0;background:var(--bg)}
+.pbody iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:var(--bg)}
+.pbody iframe.loading{visibility:hidden}
+.pbody>.spin{position:absolute;top:16px;left:16px}
+.picker{position:absolute;inset:0;overflow:auto;padding:16px}
+.picker h2{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+.pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px}
+.pgrid button{display:flex;align-items:center;gap:9px;text-align:left;padding:8px 10px}
+.pgrid button:hover{border-color:var(--accent)}
+.pgrid .icon{display:grid;place-items:center;width:28px;height:28px;flex:none;border-radius:7px;background:var(--accent-soft);color:var(--accent)}
+.pgrid .icon svg{width:16px;height:16px}
+.gutter{flex:0 0 8px;position:relative;cursor:col-resize;touch-action:none}
+.ws.rows .gutter{cursor:row-resize}
+.gutter::after{content:"";position:absolute;inset:0;margin:auto;width:2px;height:36px;border-radius:2px;background:var(--border)}
+.ws.rows .gutter::after{width:36px;height:2px}
+.gutter:hover::after,.gutter.on::after{background:var(--accent)}
+.ws.grid .gutter{display:none}
+.ws.dragging{user-select:none}
+.ws.dragging iframe{pointer-events:none}
+.ws.has-max .tile:not(.max),.ws.has-max .gutter{display:none}
+.ws.has-max .tile.max{flex:1 1 auto !important;grid-column:1/-1 !important;grid-row:1/-1}
+@media (max-width:760px){
+  body{height:auto;overflow:auto}
+  .ws,.ws.rows,.ws.grid{display:flex;flex-direction:column;gap:10px}
+  .ws .tile{flex:none !important;height:80vh}
+  .gutter{display:none}
+}
+</style>
+</head>
+<body>
+<div class="bar">
+  <a class="back" href="../">← All tools</a>
+  <h1>Split view</h1>
+  <div class="seg" id="layout" role="group" aria-label="Layout"><button data-l="cols">Columns</button><button data-l="rows">Rows</button><button data-l="grid">Grid</button></div>
+  <button id="add" title="Add a pane (up to 6)">+ Add pane</button>
+  <label class="chk" title="Clicking a link to another tool (an IP, ASN, domain…) loads it in the next pane instead of replacing this one"><input type="checkbox" id="linkNext" checked> Open tool links in the next pane</label>
+  <span style="flex:1"></span>
+  <button id="themeBtn" title="Toggle theme"></button>
+</div>
+<main class="ws" id="ws"></main>
+
+<script src="../assets/common.js"></script>
+<script src="../assets/history.js"></script>
+<script src="../assets/tools.js"></script>
+<script>
+const MAX = 6;
+const slugOf = u => (String(u || '').match(/^tools\/([a-z0-9-]+)\//) || [])[1] || null;
+const BY = Object.fromEntries(TOOLS.map(t => [slugOf(t.href), t]));
+const relOf = loc => { const m = String(loc.pathname || '').match(/(tools\/[a-z0-9-]+\/)(?:index\.html)?$/); return m && BY[slugOf(m[1])] ? m[1] + (loc.search || '') : null; };
+const validUrl = u => typeof u === 'string' && /^tools\/[a-z0-9-]+\/(\?[^#]*)?$/.test(u) && !!BY[slugOf(u)];
+const ico = d => `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const I = { hist: ico('<path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/>'), reload: ico('<path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/>'), open: ico('<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>'),
+  max: ico('<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>'), min: ico('<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>'), close: ico('<path d="M18 6 6 18M6 6l12 12"/>') };
+// Panes show the tool without its own page chrome: the pane header names it, owns its History button and the bar owns the theme.
+// The header collapses to zero height but stays in place, so the tool's History menu still opens at the pane's top-right.
+const EMBED_CSS = `.wrap{max-width:none!important;padding:0 14px 40px!important}
+.back,.split-link,#themeBtn,#nhBtn{display:none!important}
+header.top>div:first-child,body>.wrap>header>div:first-child{display:none!important}
+header.top,body>.wrap>header{height:0;justify-content:flex-end!important}`;
+const S = { layout: 'cols', linkNext: true, max: null };
+let panes = [], seq = 0;
+
+/* ---------- panes ---------- */
+const currentUrl = p => { try { return relOf(p.iframe.contentWindow.location) || p.url; } catch { return p.url; } };
+function pickerHTML(){
+  const rank = new Map((window.NetopsHistory?.recent() || []).map((r, i) => [r.slug, i]));   // recently used first
+  const list = [...TOOLS].sort((a, b) => (rank.get(slugOf(a.href)) ?? 99) - (rank.get(slugOf(b.href)) ?? 99));
+  return `<div class="picker"><h2>Choose a tool</h2><div class="pgrid">${list.map(t => `<button type="button" data-pick="${slugOf(t.href)}" title="${esc(t.desc)}"><span class="icon">${toolSvg(t.icon)}</span><span>${esc(t.name)}</span></button>`).join('')}</div></div>`;
+}
+function addPane(url = null, size = 1){
+  if (panes.length >= MAX) return null;
+  const p = { id: ++seq, url: null, size, iframe: null, el: document.createElement('section') };
+  p.el.className = 'tile';
+  p.el.innerHTML = `<div class="phead"><span class="ic"></span><select aria-label="Tool in this pane"><option value="">Choose a tool…</option>${TOOLS.map(t => `<option value="${slugOf(t.href)}">${esc(t.name)}</option>`).join('')}</select>
+    <button class="pbtn" data-a="hist" title="Recent inputs for this tool" aria-label="Recent inputs">${I.hist}</button><button class="pbtn" data-a="reload" title="Reload" aria-label="Reload">${I.reload}</button><a class="pbtn" data-a="open" href="#" target="_blank" rel="noopener" title="Open in a full page" aria-label="Open in a full page">${I.open}</a><button class="pbtn" data-a="max" title="Maximise" aria-label="Maximise">${I.max}</button><button class="pbtn" data-a="close" title="Close pane" aria-label="Close pane">${I.close}</button></div><div class="pbody"></div>`;
+  panes.push(p); $('#ws').appendChild(p.el);
+  load(p, validUrl(url) ? url : null);
+  return p;
+}
+function load(p, url){
+  p.url = url;
+  const body = $('.pbody', p.el);
+  if (!url) { p.iframe = null; body.innerHTML = pickerHTML(); }
+  else {
+    if (!p.iframe) { body.innerHTML = '<span class="spin"></span>'; p.iframe = document.createElement('iframe'); p.iframe.addEventListener('load', () => frameLoaded(p)); body.appendChild(p.iframe); }
+    p.iframe.classList.add('loading'); p.iframe.title = BY[slugOf(url)].name; p.iframe.src = '../' + url;
+  }
+  head(p);
+}
+function head(p){
+  const t = BY[slugOf(p.url)];
+  $('select', p.el).value = t ? slugOf(p.url) : '';
+  $('.ic', p.el).innerHTML = t ? toolSvg(t.icon) : '';
+  $$('[data-a="reload"],[data-a="open"]', p.el).forEach(b => b.hidden = !t);
+  $('[data-a="hist"]', p.el).hidden = !(t && p.embedded);
+}
+function frameLoaded(p){
+  const f = p.iframe; if (!f) return;
+  try {
+    const w = f.contentWindow, doc = f.contentDocument, rel = relOf(w.location);
+    if (rel) p.url = rel;
+    if (!doc.getElementById('splitEmbed')) doc.head.appendChild(Object.assign(doc.createElement('style'), { id: 'splitEmbed', textContent: EMBED_CSS }));
+    p.embedded = !!doc.getElementById('nhBtn');
+    syncTheme(doc);
+    doc.addEventListener('click', e => routeLink(p, e), true);
+    w.addEventListener('pagehide', () => f.classList.add('loading'));   // keep the next page hidden until it's restyled
+  } catch {}   // opened from file:// — panes still work, just with their full page chrome
+  f.classList.remove('loading');
+  head(p); save();
+}
+function removePane(p){
+  p.el.remove(); panes = panes.filter(x => x !== p);
+  if (S.max === p.id) S.max = null;
+  if (!panes.length) addPane();
+  layout(); save();
+}
+
+/* ---------- links to other tools open in the next pane ---------- */
+function routeLink(p, e){
+  if (!S.linkNext || e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+  const a = e.target.closest?.('a[href]'); if (!a || (a.target && a.target !== '_self')) return;
+  let u; try { u = new URL(a.href); } catch { return; }
+  const rel = u.origin === location.origin && relOf(u);
+  if (!rel || slugOf(rel) === slugOf(currentUrl(p))) return;   // same tool: let it navigate in place
+  e.preventDefault();
+  const i = panes.indexOf(p);
+  const t = panes.find(x => x !== p && !x.url) || (panes.length > 1 ? panes[(i + 1) % panes.length] : addPane());
+  if (!t) return;
+  S.max = null; load(t, rel); layout(); save();
+  t.el.classList.add('flash'); setTimeout(() => t.el.classList.remove('flash'), 800);
+}
+
+/* ---------- layout ---------- */
+function sizes(){   // explicit bases (not flex-grow) so a divider tracks the pointer exactly
+  const total = panes.reduce((a, p) => a + p.size, 0) || 1, gutters = (panes.length - 1) * 8;
+  panes.forEach(p => p.el.style.flex = S.layout === 'grid' ? '' : `0 1 calc((100% - ${gutters}px) * ${(p.size / total).toFixed(5)})`);
+}
+function layout(){
+  const ws = $('#ws'), n = panes.length;
+  ws.className = `ws ${S.layout}${S.max ? ' has-max' : ''}`;
+  $$('.gutter', ws).forEach(g => g.remove());
+  panes.forEach((p, i) => {   // gutters are inserted around panes; panes themselves never move (that would reload them)
+    if (i) ws.insertBefore(Object.assign(document.createElement('div'), { className: 'gutter', title: 'Drag to resize · double-click to even out' }), p.el);
+    const mx = S.max === p.id, b = $('[data-a="max"]', p.el);
+    p.el.classList.toggle('max', mx); b.innerHTML = mx ? I.min : I.max; b.title = mx ? 'Restore' : 'Maximise';
+    p.el.style.gridColumn = '';
+  });
+  if (S.layout === 'grid') {
+    const cols = Math.ceil(Math.sqrt(n)), rows = Math.ceil(n / cols), spare = cols * rows - n;
+    ws.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`; ws.style.gridTemplateRows = `repeat(${rows}, minmax(0, 1fr))`;
+    if (spare) panes[n - 1].el.style.gridColumn = `span ${spare + 1}`;
+  } else ws.style.gridTemplateColumns = ws.style.gridTemplateRows = '';
+  sizes();
+  $$('#layout button').forEach(b => b.classList.toggle('on', b.dataset.l === S.layout));
+  $('#add').disabled = n >= MAX;
+}
+
+/* ---------- theme: panes follow the bar ---------- */
+const themeOf = d => d.documentElement.dataset.theme || (d.defaultView.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+function syncTheme(doc){ try { if (doc && themeOf(doc) !== themeOf(document)) doc.getElementById('themeBtn')?.click(); } catch {} }   // click, so tools that redraw on theme change do
+new MutationObserver(() => panes.forEach(p => { try { syncTheme(p.iframe?.contentDocument); } catch {} })).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+/* ---------- state: localStorage (via history.js) + shareable ?t=slug,slug&l=layout ---------- */
+function save(){
+  window.NetopsHistory?.kv('split', { l: S.layout, link: S.linkNext, panes: panes.map(p => ({ u: p.url ? currentUrl(p) : null, s: +p.size.toFixed(3) })) });
+  const u = new URL(location.href); u.search = '';
+  u.searchParams.set('t', panes.map(p => slugOf(p.url) || '').join(','));
+  if (S.layout !== 'cols') u.searchParams.set('l', S.layout);
+  history.replaceState(null, '', u);
+}
+addEventListener('pagehide', save);
+document.addEventListener('visibilitychange', () => document.visibilityState === 'hidden' && save());
+
+/* ---------- events ---------- */
+$('#ws').addEventListener('click', e => {
+  const p = panes.find(x => x.el.contains(e.target)); if (!p) return;
+  const pick = e.target.closest('[data-pick]'), b = e.target.closest('[data-a]');
+  if (pick) { load(p, `tools/${pick.dataset.pick}/`); save(); return; }
+  if (!b) return;
+  if (b.dataset.a === 'open') { b.href = '../' + currentUrl(p); return; }   // default action opens the live URL in a new tab
+  if (b.dataset.a === 'hist') { try { p.iframe.contentDocument.getElementById('nhBtn').click(); } catch {} }   // toggles the tool's own History menu
+  if (b.dataset.a === 'reload') { try { p.iframe.contentWindow.location.reload(); } catch { load(p, p.url); } }
+  if (b.dataset.a === 'max') { S.max = S.max === p.id ? null : p.id; layout(); }
+  if (b.dataset.a === 'close') removePane(p);
+});
+$('#ws').addEventListener('change', e => {
+  const p = panes.find(x => x.el.contains(e.target));
+  if (p && e.target.tagName === 'SELECT') { load(p, e.target.value ? `tools/${e.target.value}/` : null); save(); }
+});
+$('#ws').addEventListener('dblclick', e => {
+  if (e.target.closest('.gutter')) { panes.forEach(p => p.size = 1); sizes(); save(); return; }
+  const h = e.target.closest('.phead'); if (!h || e.target.closest('select,button,a')) return;
+  const p = panes.find(x => x.el.contains(h)); S.max = S.max === p.id ? null : p.id; layout();
+});
+$('#ws').addEventListener('pointerdown', e => {
+  const g = e.target.closest('.gutter'); if (!g || S.layout === 'grid') return;
+  e.preventDefault();
+  const b = panes.find(p => p.el === g.nextElementSibling), a = panes[panes.indexOf(b) - 1], horiz = S.layout === 'cols';
+  const len = el => horiz ? el.getBoundingClientRect().width : el.getBoundingClientRect().height;
+  const start = horiz ? e.clientX : e.clientY, pa = len(a.el), pb = len(b.el), sum = a.size + b.size;
+  g.setPointerCapture(e.pointerId); g.classList.add('on'); $('#ws').classList.add('dragging');
+  const move = ev => { const na = Math.min(Math.max(pa + (horiz ? ev.clientX : ev.clientY) - start, 140), pa + pb - 140); a.size = sum * na / (pa + pb); b.size = sum - a.size; sizes(); };
+  const up = () => { g.removeEventListener('pointermove', move); g.classList.remove('on'); $('#ws').classList.remove('dragging'); save(); };
+  g.addEventListener('pointermove', move); g.addEventListener('pointerup', up, { once: true }); g.addEventListener('pointercancel', up, { once: true });
+});
+$('#layout').onclick = e => { const b = e.target.closest('[data-l]'); if (b) { S.layout = b.dataset.l; layout(); save(); } };
+$('#add').onclick = () => { addPane(); layout(); save(); };
+$('#linkNext').onchange = e => { S.linkNext = e.target.checked; save(); };
+
+/* ---------- boot ---------- */
+(function(){
+  const q = new URLSearchParams(location.search), saved = window.NetopsHistory?.kv('split');
+  const savedT = saved?.panes?.map(p => slugOf(p.u) || '').join(',');
+  // a shared ?t= link wins, unless it describes the workspace we already have saved (then keep each pane's page and size)
+  const st = q.has('t') && q.get('t') !== savedT ? { l: q.get('l'), panes: q.get('t').split(',').map(s => ({ u: BY[s] ? `tools/${s}/` : null })) }
+    : saved || { panes: [{ u: null }, { u: null }] };
+  S.layout = ['cols', 'rows', 'grid'].includes(q.get('l') || st.l) ? q.get('l') || st.l : 'cols';
+  S.linkNext = st.link !== false; $('#linkNext').checked = S.linkNext;
+  const list = (st.panes || []).slice(0, MAX).map(x => ({ u: validUrl(x.u) ? x.u : null, s: x.s > 0 ? x.s : 1 }));
+  const add = q.get('add');
+  if (BY[add]) {   // "Split view" button on a tool page: bring that tool in, with its current query if it sent one
+    let u = `tools/${add}/`;
+    try { const r = new URL(document.referrer), rel = r.origin === location.origin && relOf(r); if (rel && slugOf(rel) === add) u = rel; } catch {}
+    const same = list.find(x => slugOf(x.u) === add), empty = list.find(x => !x.u);
+    if (same) same.u = u; else if (empty) empty.u = u; else if (list.length < MAX) list.push({ u, s: 1 }); else list[list.length - 1] = { u, s: 1 };
+    if (list.length === 1) list.push({ u: null, s: 1 });
+  }
+  if (!list.length) list.push({ u: null, s: 1 });
+  list.forEach(x => addPane(x.u, x.s));
+  layout(); save();
+})();
+</script>
+</body>
+</html>

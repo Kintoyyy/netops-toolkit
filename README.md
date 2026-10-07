@@ -28,6 +28,8 @@ A browser-based toolbox for ISP operators, network engineers, DNS admins and sec
 | Image Steganography | offline | Bit planes, channel views, LSB extraction and auto-scan |
 | RSA Toolkit | offline | d / decrypt, factoring (Fermat, Pollard rho, multi-prime), small-e and Wiener attacks |
 
+**Split view** (`split/`, or the *Split view* button on any tool) puts up to six tools side by side — columns, rows or a grid, with draggable dividers. Each pane can switch tool, reload, pop out or maximise, and links to another tool (an IP in the traceroute, an ASN in Domain Intel…) open in the next pane. The layout is saved locally and in the URL, so it can be bookmarked or shared.
+
 **Recently used tools** show on the homepage, and every tool remembers its last inputs plus a **History** of recent runs (header menu → click an entry to restore and re-run it). This is stored only in your browser's localStorage and can be switched off (which also clears it) from the History menu.
 
 **Offline** tools never send data anywhere. **Online** tools call public APIs (Cloudflare/Google DoH, rdap.org, RIPEstat, ipify, Cloudflare speed test, crt.sh, CertSpotter, ipwho.is, maclookup.app, PeeringDB) directly from the visitor's browser.
@@ -37,8 +39,9 @@ Push this folder to a repo → Settings → Pages → Deploy from branch → `ma
 
 ## Structure
 ```
-index.html          homepage — tool registry is the TOOLS array near the bottom
-assets/             style.css, common.js (theme, DoH, IP helpers), history.js (recent tools, saved inputs, History menu), netcalc.js (prefix math), decoders.js (encodings, scoring, pattern highlighting)
+index.html          homepage
+split/              split view — several tools side by side in resizable panes
+assets/             tools.js (tool registry: the TOOLS array), style.css, common.js (theme, DoH, IP helpers), history.js (recent tools, saved inputs, History menu), netcalc.js (prefix math), decoders.js (encodings, scoring, pattern highlighting)
 src/<slug>.html     tool source fragments
 build.py            wraps src/*.html into tools/<slug>/index.html
 tools/<slug>/       built pages (commit these — Pages serves them)
@@ -47,6 +50,6 @@ tools/<slug>/       built pages (commit these — Pages serves them)
 ## Add a tool
 1. Create `src/my-tool.html` starting with `<!-- title: My Tool | desc: One-line description -->` (add `| js: decoders` to also load decoders.js), then your HTML and `<script>`.
 2. Run `python3 build.py`.
-3. Add an entry to `TOOLS` in `index.html`.
+3. Add an entry to `TOOLS` in `assets/tools.js` (the homepage and split view both read it).
 
 Tools accept `?q=` in the URL, so they can link to each other (e.g. `tools/domain-intel/?q=8.8.8.8`).

@@ -18,7 +18,7 @@ TEMPLATE = """<!doctype html>
   <a class="back" href="../../">← All tools</a>
   <header class="top">
     <div><h1>{title}</h1><p class="sub">{desc}</p></div>
-    <button id="themeBtn" title="Toggle theme"></button>
+    <div class="hdr-actions"><a class="btn split-link" href="../../split/?add={slug}" title="Use this tool side by side with others"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-3px"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></svg> Split view</a><button id="themeBtn" title="Toggle theme"></button></div>
   </header>
 <script src="../../assets/common.js"></script>
 <script src="../../assets/history.js"></script>
@@ -34,6 +34,6 @@ for src in sorted((ROOT / "src").glob("*.html")):
     assert m, f"missing header in {src}"
     out = ROOT / "tools" / src.stem / "index.html"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(TEMPLATE.format(title=html.escape(m[1]), desc=html.escape(m[2]), body=text[m.end():],
+    out.write_text(TEMPLATE.format(title=html.escape(m[1]), desc=html.escape(m[2]), slug=src.stem, body=text[m.end():],
         extra=''.join(f'<script src="../../assets/{j.strip()}.js"></script>\n' for j in (m[3] or '').split(',') if j.strip())))
     print("built", out.relative_to(ROOT))

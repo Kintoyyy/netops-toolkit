@@ -26,6 +26,7 @@ a{color:var(--accent)}
 .back{display:inline-block;color:var(--muted);text-decoration:none;font-size:13px;margin-bottom:10px}
 .back:hover{color:var(--accent)}
 header.top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.hdr-actions{display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap}
 h1{font-size:22px;margin:0 0 4px}
 h2{font-size:16px;margin:0 0 10px}
 h3{font-size:14px;margin:14px 0 6px}
