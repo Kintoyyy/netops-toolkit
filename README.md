@@ -28,6 +28,8 @@ A browser-based toolbox for ISP operators, network engineers, DNS admins and sec
 | Image Steganography | offline | Bit planes, channel views, LSB extraction and auto-scan |
 | RSA Toolkit | offline | d / decrypt, factoring (Fermat, Pollard rho, multi-prime), small-e and Wiener attacks |
 
+**Recently used tools** show on the homepage, and every tool remembers its last inputs plus a **History** of recent runs (header menu → click an entry to restore and re-run it). This is stored only in your browser's localStorage and can be switched off (which also clears it) from the History menu.
+
 **Offline** tools never send data anywhere. **Online** tools call public APIs (Cloudflare/Google DoH, rdap.org, RIPEstat, ipify, Cloudflare speed test, crt.sh, CertSpotter, ipwho.is, maclookup.app, PeeringDB) directly from the visitor's browser.
 
 ## Deploy
@@ -36,7 +38,7 @@ Push this folder to a repo → Settings → Pages → Deploy from branch → `ma
 ## Structure
 ```
 index.html          homepage — tool registry is the TOOLS array near the bottom
-assets/             style.css, common.js (theme, DoH, IP helpers), netcalc.js (prefix math), decoders.js (encodings, scoring, pattern highlighting)
+assets/             style.css, common.js (theme, DoH, IP helpers), history.js (recent tools, saved inputs, History menu), netcalc.js (prefix math), decoders.js (encodings, scoring, pattern highlighting)
 src/<slug>.html     tool source fragments
 build.py            wraps src/*.html into tools/<slug>/index.html
 tools/<slug>/       built pages (commit these — Pages serves them)

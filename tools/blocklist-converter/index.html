@@ -15,6 +15,7 @@
     <button id="themeBtn" title="Toggle theme"></button>
   </header>
 <script src="../../assets/common.js"></script>
+<script src="../../assets/history.js"></script>
 <section class="panel">
   <label class="small" for="raw">Input — any mix of hosts lines, ||adblock^ rules, dnsmasq/unbound/RPZ entries, URLs, plain domains, IPs or CIDRs</label>
   <textarea id="raw" spellcheck="false" style="min-height:180px" placeholder="0.0.0.0 ads.example.com&#10;||tracker.example.net^&#10;https://phish.example.org/login&#10;malware.example.top&#10;203.0.113.0/24"></textarea>
@@ -35,7 +36,7 @@
     <label class="small" style="margin:0 0 0 8px">Name / comment</label>
     <input type="text" id="name" class="mono" value="blocklist" style="width:140px">
     <span style="flex:1"></span>
-    <button id="cp">Copy</button><button class="primary" id="dl">Download</button>
+    <button id="cp">Copy</button><button class="primary" id="dl" data-nosave>Download</button>
   </div>
   <p class="note" id="fmtNote"></p>
   <pre id="out" style="margin-top:8px;max-height:480px"></pre>

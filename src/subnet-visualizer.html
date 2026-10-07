@@ -78,6 +78,7 @@ function save(){ clearTimeout(saveT); saveT = setTimeout(() => {
   const u = new URL(location.href); u.searchParams.set('q', cidrStr(root.net, root.p, root.v)); u.searchParams.delete('alloc');
   if (root.kids || root.note || root.color) u.searchParams.set('s', encodeState()); else u.searchParams.delete('s');
   history.replaceState(null, '', u);
+  window.NetopsHistory?.state(u.search);   // remembered locally so the plan survives closing the tab
 }, 250); }
 
 /* ---------- render ---------- */
@@ -168,6 +169,7 @@ $('#allocGo').onclick = () => allocate($('#alloc').value.split('\n'));
 
 /* ---------- boot: ?q=10.0.0.0/16 [&s=state | &alloc=Name=cidr|Name=cidr] ---------- */
 (function(){
+  if (!location.search) { const s = window.NetopsHistory?.state(); if (s) history.replaceState(null, '', location.pathname + s); }
   const q = getParam('q'); if (q) { const [a, p] = q.split('/'); $('#addr').value = a; $('#size').value = p || ''; }
   if (!start()) { $('#addr').value = '10.0.0.0'; $('#size').value = 16; start(); }
   try { if (getParam('s')) decodeState(getParam('s')); } catch { msg('The layout in this link could not be read — showing the bare network.'); }

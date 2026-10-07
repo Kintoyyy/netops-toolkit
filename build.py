@@ -21,6 +21,7 @@ TEMPLATE = """<!doctype html>
     <button id="themeBtn" title="Toggle theme"></button>
   </header>
 <script src="../../assets/common.js"></script>
+<script src="../../assets/history.js"></script>
 {extra}{body}
 </div>
 </body>
