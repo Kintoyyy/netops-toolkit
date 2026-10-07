@@ -17,6 +17,7 @@ A browser-based toolbox for ISP operators, network engineers, DNS admins and sec
 | Subnet Visualizer | offline | Split/join address plans with notes, colors, block map and shareable links |
 | BGP Toolkit | online | ASN/prefix lookup, RPKI, looking-glass AS paths and path / neighbour graphs (RIPEstat), prefix lists, communities, AS-path regex |
 | MikroTik Burst Calculator | offline | Queue burst duration / re-arm time per the RouterOS algorithm, misconfiguration checks, playable speed simulation vs max-limit only, simple queue / PPP / Hotspot / queue tree config, import from rate-limit strings |
+| MikroTik CGNAT Generator | offline | Deterministic CGNAT (RFC 6598 / RFC 7422): aggregated netmap blocks — one rule per block (32 rules for 1,024 subscribers behind a /27, fixed public IP per subscriber) or TCP/UDP port blocks for exact per-subscriber tracing, capacity and port-exhaustion checks, safe edge filters, blackhole route, mapping CSV and abuse IP:port lookup |
 | Traceroute Analyzer | online | Parses tracert / traceroute / mtr / tracepath / Cisco / Juniper / MikroTik output; hop owner (ASN, prefix), IXP (PeeringDB), location, PTR, private/CGNAT hops, ICMP deprioritisation vs real latency and loss |
 | Blocklist Converter | offline | RPZ, Unbound, dnsmasq, MikroTik, AdGuard, Squid, ipset |
 | PCAP Analyzer | offline | pcap/pcapng triage: port scans, DNS/DGA/tunneling, ICMP channels, follow stream, HTTP export, credentials |

@@ -1,0 +1,277 @@
+<!-- title: MikroTik CGNAT Generator | desc: Generate deterministic carrier-grade NAT for RouterOS (RFC 6598 / RFC 7422) with aggregated netmap blocks — a few rules map every subscriber to a fixed public IP and port block — plus the mapping log, an abuse lookup and edge filters. -->
+<style>
+.cg .field{display:flex;flex-direction:column;gap:4px}
+.cg .opts{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:10px 18px;margin-top:14px}
+.cg .opts label.chk{align-items:flex-start;gap:8px}
+.cg .opts input{margin-top:3px}
+.cg .opts small{display:block;color:var(--muted);font-size:12px;line-height:1.4;margin-top:1px}
+.cg .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.cg .tile{border:1px solid var(--border);border-radius:9px;padding:10px 12px}
+.cg .tile .l{font-size:12px;color:var(--muted)}
+.cg .tile .v{font-size:22px;font-weight:600;margin:2px 0}
+.cg .tile .s{font-size:12px;color:var(--muted)}
+.cg ul.msgs{list-style:none;margin:14px 0 0;padding:0;display:grid;gap:6px;font-size:13px}
+.cg ul.msgs li{display:flex;gap:8px;align-items:baseline}
+.cg ul.msgs .b{min-width:58px;text-align:center}
+.cg #script{max-height:460px;white-space:pre;word-break:normal}
+.cg #lookOut{margin-top:10px;font-size:13.5px}
+.cg #lookOut .card{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.cg #map td{font-variant-numeric:tabular-nums}
+.cg .note .mono{word-break:normal}
+</style>
+<div class="cg">
+<section class="panel">
+  <div class="grid2">
+    <div><label class="small" for="inside">Subscriber range (inside)</label>
+      <input type="text" id="inside" class="mono" value="100.64.0.0/22" spellcheck="false" autocomplete="off" style="width:100%">
+      <p class="note" style="margin-top:6px">Every address in the range is mapped (network, gateway and broadcast too — harmless). It must start on a boundary of the pool's block size.</p></div>
+    <div><label class="small" for="pool">Public IP pool — CIDR, ranges or single IPs</label>
+      <textarea id="pool" class="mono" spellcheck="false" style="min-height:62px">203.0.113.0/27</textarea>
+      <label class="chk"><input type="checkbox" id="skipPub"> Skip network &amp; broadcast (pool is a connected subnet, not routed to this router)</label></div>
+  </div>
+  <div class="row" style="align-items:flex-end;margin-top:12px">
+    <div class="field"><label class="small" for="style">Rules</label>
+      <select id="style"><option value="simple">One rule per block — all protocols, router picks ports</option><option value="ports">Port blocks — TCP + UDP rule per block (exact tracing)</option></select></div>
+    <div class="field"><label class="small" for="alloc">Allocation</label>
+      <select id="alloc"><option value="fit">Fit every subscriber (most ports each)</option><option value="ratio">Fixed subscribers per public IP</option><option value="ports">Fixed ports per subscriber</option></select></div>
+    <div class="field" id="allocNWrap" hidden><label class="small" for="allocN" id="allocNLabel">Subscribers per IP</label><input type="number" id="allocN" min="1" max="65535" value="32" style="width:110px"></div>
+    <div class="field" id="portWrap"><label class="small" for="pStart">Port range</label><span><input type="number" id="pStart" value="1024" min="1" max="65535" style="width:88px" aria-label="First port"> – <input type="number" id="pEnd" value="65535" min="1" max="65535" style="width:88px" aria-label="Last port"></span></div>
+    <div class="field"><label class="small" for="wan">WAN interface list</label><input type="text" id="wan" value="WAN" style="width:110px" spellcheck="false"></div>
+    <div class="field"><label class="small" for="tag">Comment tag</label><input type="text" id="tag" value="cgnat" style="width:110px" spellcheck="false"></div>
+    <div class="field"><label class="small" for="ver">RouterOS</label><select id="ver"><option value="7">v7</option><option value="6">v6</option></select></div>
+  </div>
+  <div class="opts">
+    <label class="chk"><input type="checkbox" id="optRemove" checked><span>Remove rules from a previous run<small>Deletes rules whose comment starts with the tag first, so you can paste again after a change.</small></span></label>
+    <label class="chk" id="otherWrap"><input type="checkbox" id="optOther" checked><span>Translate other protocols too<small>One more netmap per block for ICMP, GRE… Without it, ping leaves with a 100.64 source and fails.</small></span></label>
+    <label class="chk"><input type="checkbox" id="optFilter" checked><span>RFC 6598 edge filters<small>Keep shared address space off the WAN — the docs' rules that are safe on the NAT router itself.</small></span></label>
+    <label class="chk"><input type="checkbox" id="optBlackhole"><span>Blackhole route for the pool<small>If the pool is routed to this router: traffic to unused public IPs is dropped here instead of looping upstream.</small></span></label>
+  </div>
+</section>
+
+<section class="panel"><div class="tiles" id="tiles"></div><ul class="msgs" id="msgs"></ul></section>
+
+<section class="panel">
+  <div class="row" style="margin-top:0"><h2 style="margin:0">RouterOS script</h2><span class="muted" id="lineInfo"></span><span style="flex:1"></span><button id="copy">Copy</button><button id="dl">Download .rsc</button></div>
+  <pre id="script" style="margin-top:10px"></pre>
+  <p class="note" id="preview"></p>
+  <p class="note">How it works: the subscriber range is cut into blocks the same size as each public block, and each block gets a <span class="mono">netmap</span> onto the public block. Netmap keeps an address's position, so the 6th address of a block always becomes the 6th public IP. With one rule per block that covers every protocol and the router picks ports; with port blocks each block gets a TCP and a UDP rule with its own port range — two rules, because <span class="mono">to-ports</span> needs a port-based protocol and <span class="mono">protocol</span> takes a single value. NAT only evaluates the first packet of a connection — existing connections keep their old mapping until they end (<span class="mono">/ip firewall connection remove [find]</span> applies new rules at once but drops every connection). The docs' filter <span class="mono">chain=forward src-address=100.64.0.0/10 out-interface=WAN action=drop</span> is left out on purpose: the forward filter runs before source NAT, so on the CGNAT router it would drop all subscriber traffic.</p>
+</section>
+
+<section class="panel">
+  <div class="row" style="margin-top:0"><h2 style="margin:0">Mapping &amp; abuse lookup</h2><span style="flex:1"></span><button id="csv">Download mapping CSV</button></div>
+  <div class="row"><input type="text" id="lookup" class="grow mono" data-nosave autocomplete="off" spellcheck="false" placeholder="Subscriber IP (100.64.1.20) or public IP:port from an abuse report (203.0.113.5:40123)"></div>
+  <div id="lookOut"></div>
+  <div class="tablewrap" style="margin-top:12px;max-height:420px;overflow:auto"><table id="map"></table></div>
+  <p class="note">Keep the CSV, dated, with your records. With port blocks, any public IP and port belongs to exactly one subscriber while this mapping is in force — the reduced logging RFC 7422 describes; with one rule per block, a public IP narrows it to the subscribers that share it. A different pool, range or allocation means a different mapping, so archive the old file before changing it.</p>
+</section>
+</div>
+
+<script>
+const MAXSUB = 262144, MAXPUB = 4096, PREVIEW = 400;
+const badge = (c, t) => `<span class="b b-${c}">${esc(t)}</span>`;
+const LV = { ok: ['ok', 'OK'], info: ['info', 'Info'], warn: ['warn', 'Check'], bad: ['bad', 'Problem'] };
+const num = n => n.toLocaleString();
+
+/* ---------- addresses ---------- */
+function parseRange(tok){   // CIDR, a-b range or one address -> { s, e, p? }
+  tok = tok.trim(); let m;
+  if ((m = tok.match(/^(\d+\.\d+\.\d+\.\d+)\/(\d{1,2})$/))) { const ip = parseIPv4(m[1]), p = +m[2]; if (ip == null || p > 32) return null; const size = 2 ** (32 - p), s = Math.floor(ip / size) * size; return { s, e: s + size - 1, p }; }
+  if ((m = tok.match(/^(\d+\.\d+\.\d+\.\d+)\s*-\s*(\d+\.\d+\.\d+\.\d+)$/))) { const a = parseIPv4(m[1]), b = parseIPv4(m[2]); return a != null && b != null && a <= b ? { s: a, e: b } : null; }
+  const ip = parseIPv4(tok); return ip != null ? { s: ip, e: ip } : null;
+}
+const cidr = (s, size) => `${fmtIPv4(s)}/${32 - Math.log2(size)}`;
+function toBlocks(s, e){ const out = []; while (s <= e) { let size = 1; while (s % (size * 2) === 0 && s + size * 2 - 1 <= e) size *= 2; out.push({ s, size }); s += size; } return out; }
+function poolBlocks(text, skip){   // the pool as aligned CIDR blocks, largest first (netmap maps by position within a CIDR)
+  const ips = new Set(), bad = [];
+  for (const tok of text.split(/[\s,;]+/).filter(Boolean)) {
+    const r = parseRange(tok); if (!r) { bad.push(tok); continue; }
+    let { s, e } = r; if (skip && r.p != null && r.p <= 30) { s++; e--; }
+    for (let ip = s; ip <= e && ips.size < MAXPUB; ip++) ips.add(ip);
+  }
+  const sorted = [...ips].sort((a, b) => a - b), runs = [];
+  sorted.forEach(ip => { const r = runs.at(-1); if (r && ip === r[1] + 1) r[1] = ip; else runs.push([ip, ip]); });
+  const blocks = runs.flatMap(([a, b]) => toBlocks(a, b)).sort((a, b) => b.size - a.size || a.s - b.s);
+  return { blocks, total: ips.size, bad, ips: sorted };
+}
+const inCgn = ip => ip >= parseIPv4('100.64.0.0') && ip <= parseIPv4('100.127.255.255');
+const pow2floor = n => 2 ** Math.floor(Math.log2(n));
+
+/* ---------- plan: carve the subscriber range into netmap blocks ---------- */
+let M = null, SCRIPT = '';
+function plan(o = {}){   // o.skipPub overrides the checkbox (used to price the alternative); o.alt = no nested comparison
+  const msgs = [], err = t => ({ error: t });
+  const inR = parseRange($('#inside').value);
+  if (!inR) return err('Enter the subscriber range as a CIDR (100.64.0.0/22) or a range (100.64.0.0-100.64.3.255).');
+  const s = inR.s, total = inR.e - inR.s + 1, N = Math.min(total, MAXSUB), skip = o.skipPub ?? $('#skipPub').checked;
+  const { blocks, total: poolSize, bad, ips } = poolBlocks($('#pool').value, skip);
+  if (!blocks.length) return err('Add at least one public IP, range or CIDR.');
+  // simple: one netmap per block for every protocol, the router picks ports. ports: TCP + UDP rules with a port block each
+  // (to-ports needs a port-based protocol and protocol takes one value, so a port block can't cover both in one rule)
+  const simple = $('#style').value === 'simple', mode = $('#alloc').value, n = Math.max(1, Math.floor(+$('#allocN').value || 1));
+  const pStart = Math.floor(+$('#pStart').value), pEnd = Math.floor(+$('#pEnd').value);
+  if (!simple && !(pStart >= 1 && pEnd <= 65535 && pStart <= pEnd)) return err('The port range must be within 1–65535, first port ≤ last port.');
+  const range = pEnd - pStart + 1;
+  let perIP, ports = null;
+  if (mode === 'fit') perIP = Math.max(1, Math.ceil(N / poolSize));
+  else if (mode === 'ratio') perIP = n;
+  else { ports = Math.min(n, range); perIP = Math.floor(range / ports); }
+  if (!simple && ports == null) ports = Math.floor(range / perIP);
+  if (!simple && ports < 1) return err(`${num(perIP)} subscribers per IP don't fit in ${num(range)} ports — add public IPs or widen the port range.`);
+  const first = Math.min(blocks[0].size, pow2floor(N));
+  if (s % first) return err(`For netmap the subscriber range must start on a /${32 - Math.log2(first)} boundary (the pool's largest block), e.g. ${fmtIPv4(Math.floor(s / first) * first)} or ${fmtIPv4(Math.ceil(s / first) * first)}.`);
+  // biggest public blocks first, then each block's port slots; block sizes only shrink, so every chunk stays aligned
+  const chunks = []; let off = 0;
+  outer: for (const b of blocks) for (let k = 0; k < perIP; k++) {
+    const rem = N - off; if (rem <= 0) break outer;
+    const c = Math.min(b.size, pow2floor(rem));
+    chunks.push({ off, size: c, pub: b.s, k, lo: simple ? null : pStart + k * ports, hi: simple ? null : pStart + (k + 1) * ports - 1 });
+    off += c;
+  }
+  const mapped = off, rulesPer = simple ? 1 : $('#optOther').checked ? 3 : 2, rules = chunks.length * rulesPer;
+  const usedIPs = new Set(chunks.flatMap(c => Array.from({ length: c.size }, (_, j) => c.pub + j))).size, maxShare = Math.max(...blocks.map(b => chunks.filter(c => c.pub === b.s).length));
+
+  if (bad.length) msgs.push(['bad', `Couldn't read in the pool: ${esc(bad.slice(0, 5).join(' · '))}`]);
+  const overlap = ips.find(ip => ip >= s && ip <= inR.e);
+  if (overlap != null) msgs.push(['bad', `The pool overlaps the subscriber range (${esc(fmtIPv4(overlap))}).`]);
+  if (mapped < N) msgs.push(['bad', `Only ${num(mapped)} of ${num(N)} subscribers fit: ${num(poolSize)} public IPs × ${num(perIP)} each. Add about ${num(Math.ceil((N - mapped) / perIP))} more public IPs or ${simple ? 'allow more subscribers per IP' : 'use fewer ports per subscriber'} — the rest get no translation.`]);
+  if (total > MAXSUB) msgs.push(['warn', `The range holds ${num(total)} addresses; only the first ${num(MAXSUB)} are mapped. Split it across routers or runs (with different tags).`]);
+  if (!simple && ports < 512) msgs.push(['bad', `${num(ports)} ports per subscriber is very tight — browsers, apps and torrents will run out (port exhaustion).`]);
+  else if (!simple && ports < 1000) msgs.push(['warn', `${num(ports)} ports per subscriber: fine for light use, but busy households can run out. ~2,000+ is a common target.`]);
+  // sharing: typical CGNAT is 1:16-1:64; beyond that each subscriber's slice of an IP's ~64k ports gets thin
+  const busyPorts = simple ? Math.floor(64512 / maxShare) : ports, for64 = Math.ceil(mapped / 64);
+  if (maxShare > 128) msgs.push(['bad', `${num(maxShare)} subscribers share each public IP: about ${num(busyPorts)} ports each when they're all busy. Expect port exhaustion, dropped sessions and IP-reputation trouble (CAPTCHAs, blocks). Typical CGNAT is 1:16–1:64 — 1:64 needs about ${num(for64)} public IPs.`]);
+  else if (maxShare > 64) msgs.push(['warn', `${num(maxShare)} subscribers share each public IP (about ${num(busyPorts)} ports each when busy). Some sites rate-limit or CAPTCHA busy shared addresses; 1:64 or lower is typical (about ${num(for64)} public IPs).`]);
+  if (!simple && pStart < 1024) msgs.push(['info', 'Ports below 1024 are well-known service ports; starting at 1024 is usual.']);
+  if (simple) msgs.push(['info', `Each subscriber keeps a fixed public IP, but the router picks source ports, so an abuse report's IP:port narrows to the ${num(maxShare)} subscribers sharing that IP. Keep connection logs (e.g. Traffic Flow) or use “Port blocks” for exact tracing.`]);
+  const special = ips.map(ip => [ip, v4Special(ip)]).find(([, l]) => l);
+  if (special) msgs.push(['warn', `${esc(fmtIPv4(special[0]))} is ${esc(special[1])}, not a public address — replace the pool with your real public IPs.`]);
+  if (!inCgn(s) || !inCgn(inR.e)) msgs.push(['info', 'The subscriber range is outside 100.64.0.0/10. RFC 6598 reserves that block for CGNAT; RFC 1918 space works but can clash with customers’ own LANs.']);
+  // fragmentation: every pool block repeats the whole set of rules
+  const blockList = `${esc(blocks.slice(0, 4).map(b => cidr(b.s, b.size)).join(', '))}${blocks.length > 4 ? ', …' : ''}`;
+  const alt = skip && !o.alt ? plan({ skipPub: false, alt: true }) : null;
+  if (alt && !alt.error && alt.rules < rules) msgs.push([rules >= alt.rules * 3 ? 'bad' : 'warn', `“Skip network &amp; broadcast” breaks the pool into ${blocks.length} blocks (${blockList}) and the rules repeat for each: ${num(rules)} rules instead of ${num(alt.rules)}. A pool routed to this router can use every address — untick it unless the pool really is a connected subnet.`]);
+  else if (blocks.length > 1) {
+    const ideal = Math.ceil(mapped / pow2floor(poolSize)) * rulesPer;
+    msgs.push(rules > ideal * 1.5
+      ? [rules >= ideal * 3 ? 'bad' : 'warn', `The pool splits into ${blocks.length} CIDR blocks (${blockList}) and the rules repeat for each: ${num(rules)} rules, where one aligned block of ${num(pow2floor(poolSize))} addresses would need about ${num(ideal)}.`]
+      : ['info', `The pool splits into ${blocks.length} CIDR blocks (${blockList}), so each needs its own rules. A single aligned block gives the fewest.`]);
+  }
+  // rule count: no jump chains, so a new connection walks the srcnat rules in order
+  if (rules > 2048) msgs.push(['bad', `${num(rules)} NAT rules and no jump chains: a new connection can be checked against all of them in order (about ${num(Math.round(rules / 2))} on average) — heavy CPU at CGNAT connection rates. Use a larger, aligned pool (fewer, bigger blocks) or split subscribers across several routers.`]);
+  else if (rules > 256) msgs.push(['warn', `${num(rules)} NAT rules and no jump chains: a new connection walks up to ${num(rules)} of them in order. Fine for modest traffic; at high connection rates prefer a larger pool or splitting subscribers across routers.`]);
+  if (usedIPs < poolSize) msgs.push(['info', `${num(poolSize - usedIPs)} public IP${poolSize - usedIPs > 1 ? 's are' : ' is'} unused${mode === 'fit' ? '' : ' — “Fit every subscriber” spreads subscribers over the whole pool for more ports each'}.`]);
+  if (!$('#wan').value.trim()) msgs.push(['warn', 'Set the WAN interface list: without it the netmap rules also catch traffic between subscribers and your own networks.']);
+  if (!msgs.some(([l]) => l === 'bad' || l === 'warn')) msgs.push(['ok', simple ? `${num(rules)} rules give every subscriber a fixed public IP for all protocols.` : `${num(rules)} rules give every subscriber ${num(ports)} TCP and ${num(ports)} UDP ports on a fixed public IP.`]);
+  const rank = { bad: 0, warn: 1, info: 2, ok: 3 }; msgs.sort((a, b) => rank[a[0]] - rank[b[0]]);   // problems first
+  return { s, N, total, mapped, blocks, poolSize, perIP, ports, pStart, pEnd, chunks, rulesPer, rules, usedIPs, maxShare, msgs, simple };
+}
+function at(i){   // subscriber index -> its chunk, public IP and ports
+  let a = 0, b = M.chunks.length - 1;
+  while (a < b) { const m = (a + b + 1) >> 1; if (M.chunks[m].off <= i) a = m; else b = m - 1; }
+  const c = M.chunks[a]; return { ip: M.s + i, pub: c.pub + (i - c.off), lo: c.lo, hi: c.hi, rule: a + 1, c };
+}
+function owner(ip, port){   // public IP + port -> subscriber index, or a reason
+  const k = Math.floor((port - M.pStart) / M.ports);
+  const c = M.chunks.find(c => c.k === k && ip >= c.pub && ip < c.pub + c.size);
+  return c ? c.off + (ip - c.pub) : null;
+}
+
+/* ---------- script ---------- */
+function build(){
+  const clean = v => String(v).trim().replace(/[^\w.-]/g, '');
+  const tag = clean($('#tag').value) || 'cgnat', wan = clean($('#wan').value), remove = $('#optRemove').checked, L = [];
+  const oif = wan ? ` out-interface-list=${wan}` : '';
+  L.push(`# Deterministic CGNAT (RFC 6598 shared space, RFC 7422 port blocks) with netmap - NetOps Toolkit`);
+  L.push(`# ${M.mapped} subscribers from ${fmtIPv4(M.s)} -> ${M.usedIPs} public IPs, up to ${M.maxShare} per IP, ${M.simple ? 'ports picked by the router' : `${M.ports} ports each (${M.pStart}-${M.pEnd})`}, ${M.rules} rules`);
+  L.push('/ip firewall nat');
+  if (remove) L.push(`remove [find where comment~"^${tag}"]`);
+  M.chunks.forEach(c => {
+    const src = cidr(M.s + c.off, c.size), dst = cidr(c.pub, c.size), ports = `${c.lo}-${c.hi}`;
+    if (M.simple) { L.push(`add chain=srcnat action=netmap src-address=${src} to-addresses=${dst}${oif} comment="${tag} ${src} -> ${dst}"`); return; }
+    L.push(`add chain=srcnat action=netmap protocol=tcp src-address=${src} to-addresses=${dst} to-ports=${ports}${oif} comment="${tag} ${src} -> ${dst}:${ports}"`);
+    L.push(`add chain=srcnat action=netmap protocol=udp src-address=${src} to-addresses=${dst} to-ports=${ports}${oif} comment="${tag} ${src} -> ${dst}:${ports}"`);
+    if (M.rulesPer === 3) L.push(`add chain=srcnat action=netmap src-address=${src} to-addresses=${dst}${oif} comment="${tag} ${src} -> ${dst} other protocols"`);
+  });
+  if ($('#optFilter').checked && wan) {
+    L.push('', '/ip firewall filter');
+    if (remove) L.push(`remove [find where comment~"^${tag}"]`);
+    L.push(`add chain=input src-address=100.64.0.0/10 in-interface-list=${wan} action=drop comment="${tag} RFC 6598: no shared space from the WAN"`,
+      `add chain=forward src-address=100.64.0.0/10 in-interface-list=${wan} action=drop comment="${tag} RFC 6598: no shared space from the WAN"`,
+      `add chain=output dst-address=100.64.0.0/10 out-interface-list=${wan} action=drop comment="${tag} RFC 6598: no shared space to the WAN"`,
+      `add chain=forward dst-address=100.64.0.0/10 out-interface-list=${wan} action=drop comment="${tag} RFC 6598: no shared space to the WAN"`);
+  }
+  if ($('#optBlackhole').checked) {
+    L.push('', '/ip route');
+    if (remove) L.push(`remove [find where comment~"^${tag}"]`);
+    M.blocks.forEach(b => L.push(`add dst-address=${cidr(b.s, b.size)} ${$('#ver').value === '6' ? 'type=blackhole' : 'blackhole'} comment="${tag} pool"`));
+  }
+  return L.join('\n');
+}
+
+/* ---------- render ---------- */
+function render(){
+  const simple = $('#style').value === 'simple';   // port-only controls don't apply to one-rule-per-block
+  $('#portWrap').hidden = $('#otherWrap').hidden = simple; $('#alloc option[value="ports"]').disabled = simple;
+  if (simple && $('#alloc').value === 'ports') $('#alloc').value = 'fit';
+  M = plan();
+  const allocMode = $('#alloc').value; $('#allocNWrap').hidden = allocMode === 'fit'; $('#allocNLabel').textContent = allocMode === 'ports' ? 'Ports per subscriber' : 'Subscribers per IP';
+  if (M.error) {
+    $('#tiles').innerHTML = ''; $('#msgs').innerHTML = `<li>${badge(...LV.bad)}<span>${esc(M.error)}</span></li>`;
+    SCRIPT = ''; $('#script').textContent = ''; $('#lineInfo').textContent = ''; $('#preview').textContent = ''; $('#map').innerHTML = ''; $('#lookOut').innerHTML = ''; M = null; return;
+  }
+  $('#tiles').innerHTML = [
+    ['Subscribers', num(M.mapped), M.mapped < M.N ? `of ${num(M.N)} — pool too small` : `${fmtIPv4(M.s)} – ${fmtIPv4(M.s + M.mapped - 1)}`],
+    ['Public IPs', num(M.usedIPs), `of ${num(M.poolSize)} in the pool`],
+    ['Sharing', `1 : ${num(M.maxShare)}`, 'subscribers per public IP'],
+    M.simple ? ['Ports', 'Dynamic', 'picked by the router per connection'] : ['Ports each', num(M.ports), `TCP and UDP · ${M.pStart}–${M.pEnd}`],
+    ['NAT rules', num(M.rules), `${num(M.chunks.length)} block${M.chunks.length > 1 ? 's' : ''} × ${M.rulesPer} · no jumps`],
+  ].map(([l, v, s]) => `<div class="tile"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${esc(s)}</div></div>`).join('');
+  $('#msgs').innerHTML = M.msgs.map(([l, t]) => `<li>${badge(...LV[l])}<span>${t}</span></li>`).join('');
+  SCRIPT = build();
+  const lines = SCRIPT.split('\n');
+  $('#script').textContent = lines.slice(0, PREVIEW).join('\n') + (lines.length > PREVIEW ? '\n…' : '');
+  $('#lineInfo').textContent = `${num(lines.length)} lines`;
+  $('#preview').textContent = lines.length > PREVIEW ? `Showing the first ${PREVIEW} of ${num(lines.length)} lines — Copy and Download include everything.` : '';
+  const rows = Math.min(M.mapped, 300);
+  $('#map').innerHTML = `<thead><tr><th>#</th><th>Subscriber</th><th>Public IP</th><th>Ports</th><th>Netmap block</th></tr></thead><tbody>${Array.from({ length: rows }, (_, i) => { const m = at(i);
+    return `<tr><td class="muted">${i + 1}</td><td class="mono">${fmtIPv4(m.ip)}</td><td class="mono">${fmtIPv4(m.pub)}</td><td class="mono">${M.simple ? '<span class="muted">any</span>' : `${m.lo}–${m.hi}`}</td><td class="mono muted">${cidr(M.s + m.c.off, m.c.size)}</td></tr>`; }).join('')}</tbody>`
+    + (M.mapped > rows ? `<tfoot><tr><td colspan="5" class="muted">First ${rows} of ${num(M.mapped)} — the CSV has them all.</td></tr></tfoot>` : '');
+  lookup();
+}
+
+/* ---------- lookup ---------- */
+function lookup(){
+  const out = $('#lookOut'), q = $('#lookup').value.trim();
+  if (!q || !M) { out.innerHTML = ''; return; }
+  const m = q.match(/^(\d+\.\d+\.\d+\.\d+)(?:\s*[:\s]\s*(\d{1,5}))?$/), ip = m && parseIPv4(m[1]);
+  if (ip == null) { out.innerHTML = '<div class="err">Enter an IP address, or a public IP and port like 203.0.113.5:40123.</div>'; return; }
+  const port = m[2] != null ? +m[2] : null, card = (b, t) => `<div class="card">${b}<span>${t}</span></div>`;
+  const who = i => { const r = at(i); return `<b class="mono">${fmtIPv4(r.ip)}</b> → <b class="mono">${fmtIPv4(r.pub)}</b> ${M.simple ? 'any port' : `ports <b class="mono">${r.lo}–${r.hi}</b>`} <span class="muted">(netmap ${cidr(M.s + r.c.off, r.c.size)})</span>`; };
+  const list = hs => hs.slice(0, 6).map(c => `<span class="mono">${fmtIPv4(M.s + c.off + ip - c.pub)}</span>${M.simple ? '' : ` (${c.lo}–${c.hi})`}`).join(', ') + (hs.length > 6 ? ', …' : '');
+  if (ip >= M.s && ip < M.s + M.mapped) { out.innerHTML = card(badge('info', 'Subscriber'), who(ip - M.s)); return; }
+  if (ip >= M.s && ip < M.s + M.N) { out.innerHTML = card(badge('bad', 'Unmapped'), `${esc(fmtIPv4(ip))} is in the subscriber range but the pool is too small to map it.`); return; }
+  const holders = M.chunks.filter(c => ip >= c.pub && ip < c.pub + c.size);
+  if (!holders.length) { out.innerHTML = card(badge('mute', 'Not found'), `${esc(fmtIPv4(ip))} is neither in the subscriber range nor a used public IP.`); return; }
+  if (M.simple) { out.innerHTML = card(badge('info', 'Public IP'), `<b class="mono">${esc(fmtIPv4(ip))}</b> is shared by ${num(holders.length)} subscriber${holders.length === 1 ? '' : 's'}: ${list(holders)}.${port != null ? ` Ports aren't fixed in this mode, so port ${port} alone can't say which one — match the time against connection logs, or use “Port blocks”.` : ''}`); return; }
+  if (port == null) { out.innerHTML = card(badge('info', 'Public IP'), `<b class="mono">${esc(fmtIPv4(ip))}</b> is shared by ${num(holders.length)} subscriber${holders.length === 1 ? '' : 's'}: ${list(holders)}. Add <span class="mono">:port</span> to find one.`); return; }
+  if (port < M.pStart || port > M.pEnd) { out.innerHTML = card(badge('warn', 'Outside range'), `Port ${port} is outside the CGNAT range ${M.pStart}–${M.pEnd}, so it isn't a subscriber connection (it could be the router itself).`); return; }
+  const i = owner(ip, port);
+  if (i == null) { out.innerHTML = card(badge('mute', 'Unassigned'), `No subscriber holds port ${port} on ${esc(fmtIPv4(ip))} — it's in an unused block.`); return; }
+  out.innerHTML = card(badge('ok', 'Match'), `${esc(fmtIPv4(ip))}:${port} belongs to ${who(i)}`);
+}
+
+/* ---------- wiring ---------- */
+let deb;
+const later = () => { clearTimeout(deb); deb = setTimeout(render, 150); };
+$('.cg').addEventListener('input', e => e.target.id === 'lookup' ? lookup() : later());
+$('.cg').addEventListener('change', e => e.target.matches('select, input[type=checkbox]') && later());
+$('#copy').onclick = e => SCRIPT && copyText(SCRIPT, e.target);
+$('#dl').onclick = () => SCRIPT && download(`${($('#tag').value.trim().replace(/[^\w.-]/g, '') || 'cgnat')}.rsc`, SCRIPT + '\n');
+$('#csv').onclick = () => { if (!M) return; const rows = [['subscriber_ip', 'public_ip', 'port_start', 'port_end', 'netmap_block']];
+  for (let i = 0; i < M.mapped; i++) { const m = at(i); rows.push([fmtIPv4(m.ip), fmtIPv4(m.pub), m.lo ?? '', m.hi ?? '', cidr(M.s + m.c.off, m.c.size)]); }
+  download(`cgnat-mapping-${new Date().toISOString().slice(0, 10)}.csv`, toCSV(rows), 'text/csv'); };
+if (window.NetopsHistory) window.NetopsHistory.labeler = () => `${$('#inside').value.trim()} → ${$('#pool').value.trim().split(/[\s,;]+/)[0] || '?'}`;
+if (getParam('q')) $('#inside').value = getParam('q');
+render();
+document.addEventListener('DOMContentLoaded', render);   // after History restores saved inputs
+</script>
