@@ -162,7 +162,7 @@ function calc(){
   }
   const maxSplit = Math.min(B, p + 12);
   $('#out').innerHTML = `<div class="grid2" style="margin-top:14px"><div><h2>Result</h2>${info}
-      <p style="margin-top:12px"><a class="btn" href="../subnet-visualizer/?q=${encodeURIComponent(cidrStr(net, p, v))}">Open in Subnet Visualizer →</a></p></div>
+      <p style="margin-top:12px"><a class="btn" href="../subnet-visualizer/?q=${encodeURIComponent(cidrStr(net, p, v))}">Open in Subnet Visualizer →</a>${v === 6 ? ` <a class="btn" href="../ipv6-toolkit/?q=${encodeURIComponent(p === 128 ? fmtIPv6(n) : cidrStr(net, p, v))}">Inspect in IPv6 Toolkit →</a>` : ''}</p></div>
     <div><h2>Split into smaller subnets</h2>${p >= B ? '<p class="muted">Single address — nothing to split.</p>' : `
       <div class="row" style="margin-top:0"><select id="splitP">${Array.from({ length: maxSplit - p }, (_, i) => p + 1 + i).map(x => `<option value="${x}" ${x === Math.min(B, v === 4 ? p + 2 : (p < 64 ? 64 : p + 4)) ? 'selected' : ''}>/${x} — ${(1n << BigInt(x - p)).toLocaleString()} subnets</option>`).join('')}</select><button id="splitCopy">Copy</button></div>
       <div class="tablewrap" style="max-height:420px;overflow:auto;margin-top:8px"><table><thead><tr><th>#</th><th>Subnet</th><th>Range</th></tr></thead><tbody id="splitBody"></tbody></table></div><p class="note" id="splitNote"></p>`}</div></div>`;

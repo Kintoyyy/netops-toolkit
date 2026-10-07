@@ -1,0 +1,679 @@
+<!-- title: IPv6 Toolkit | desc: Inspect any IPv6 address — type, scope, EUI-64 MAC, embedded IPv4, multicast and neighbor discovery — normalize or extract address lists, convert SLAAC and NAT64 addresses, plan ULA / VLAN /64s and ISP prefix delegation with RouterOS config, and build ip6.arpa reverse zones. | js: netcalc -->
+<style>
+.v6 .field{display:flex;flex-direction:column;gap:4px}
+.v6 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-top:14px}
+.v6 .tile{border:1px solid var(--border);border-radius:9px;padding:10px 12px;min-width:0}
+.v6 .tile .l{font-size:12px;color:var(--muted)}
+.v6 .tile .v{font-size:20px;font-weight:600;margin:2px 0;word-break:break-all}
+.v6 .tile .s{font-size:12px;color:var(--muted);word-break:break-all}
+.v6 ul.msgs{list-style:none;margin:14px 0 0;padding:0;display:grid;gap:6px;font-size:13px}
+.v6 ul.msgs li{display:flex;gap:8px;align-items:baseline}
+.v6 ul.msgs .b{min-width:58px;text-align:center}
+.v6 .opts{display:grid;gap:10px;align-content:start}
+.v6 .opts label.chk{align-items:flex-start;gap:8px}
+.v6 .opts input{margin-top:3px}
+.v6 .opts small{display:block;color:var(--muted);font-size:12px;line-height:1.4;margin-top:1px}
+.v6 pre.script{max-height:440px;white-space:pre;word-break:normal;margin-top:10px}
+.v6 .t{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;word-break:normal}
+.v6 .bits{font-size:12px;line-height:1.8}
+.v6 td.mono{font-size:12.5px}
+.v6 .note .mono{word-break:normal}
+</style>
+<div class="v6">
+<div class="tabs" id="tabs" style="margin-top:0"></div>
+
+<div class="pane" id="pane-ins">
+  <div class="row" style="margin-top:0">
+    <input type="text" id="q" class="grow mono" placeholder="2001:db8::1 · fe80::21a:2bff:fe3c:4d5e%eth0 · [2001:db8::1]:443 · 2001:db8::/48 · …ip6.arpa" autocomplete="off" spellcheck="false">
+    <button class="primary" id="go">Inspect</button>
+  </div>
+  <div id="insOut"></div>
+</div>
+
+<div class="pane" id="pane-bulk" hidden>
+  <label class="small" for="bIn">Addresses one per line — or paste any text (logs, configs, show output) and the IPv6 addresses are pulled out</label>
+  <textarea id="bIn" spellcheck="false" style="min-height:130px">Oct  7 09:14:02 edge-1 sshd[2211]: Failed password for root from 2001:DB8:0:0:8a2e:370:7334:1 port 52144
+Oct  7 09:14:09 edge-1 kernel: IN=ether1 SRC=2001:0db8:85a3:0000:0000:8a2e:0370:7334 DST=2001:db8:10::1 PROTO=TCP
+Oct  7 09:15:31 edge-1 dhcp6: fe80::21a:2bff:fe3c:4d5e%ether2 bound 2001:db8:5600::/56
+Oct  7 09:16:00 edge-1 ndp: [2001:db8:10::25]:25 reachable, 64:ff9b::198.51.100.7 via nat64</textarea>
+  <div class="row">
+    <button class="primary" id="bGo">Convert</button>
+    <select id="bFmt" aria-label="Output format"><option value="c">Compressed (RFC 5952)</option><option value="x">Expanded</option><option value="p">Reverse (ip6.arpa)</option><option value="u">URL form [ ]</option><option value="n">Its /64</option></select>
+    <label class="chk"><input type="checkbox" id="bUniq" checked> Remove duplicates</label>
+    <label class="chk"><input type="checkbox" id="bSort"> Sort</label>
+    <label class="chk"><input type="checkbox" id="bPfx" checked> Keep /prefix lengths</label>
+  </div>
+  <div id="bOut"></div>
+</div>
+
+<div class="pane" id="pane-eui" hidden>
+  <div class="row" style="margin-top:0;align-items:flex-end">
+    <div class="field"><label class="small" for="ePfx">Prefix (/64)</label><input type="text" id="ePfx" class="mono" value="2001:db8:1:10::/64" style="width:240px" spellcheck="false"></div>
+  </div>
+  <label class="small" for="eIn" style="margin-top:10px">MAC addresses (→ SLAAC address) or EUI-64 IPv6 addresses (→ MAC), one per line</label>
+  <textarea id="eIn" spellcheck="false" style="min-height:110px">00:1a:2b:3c:4d:5e
+B8:69:F4:12:34:56
+2001:db8:1:10:21a:2bff:fe3c:4d5e
+fe80::4a8f:5aff:fe01:2345</textarea>
+  <div class="row"><button class="primary" id="eGo">Convert</button><span style="flex:1"></span><button id="eCsv">CSV</button></div>
+  <div id="eOut"></div>
+  <p class="note">Windows, macOS, iOS and Android give hosts random interface IDs (stable-privacy RFC 7217, temporary RFC 8981), so their SLAAC address can't be predicted from the MAC. Routers (every RouterOS link-local), switches, printers, IoT and many Linux servers still use EUI-64.</p>
+</div>
+
+<div class="pane" id="pane-nat" hidden>
+  <div class="row" style="margin-top:0;align-items:flex-end">
+    <div class="field"><label class="small" for="nPfx">NAT64 prefix — /32, /40, /48, /56, /64 or /96 (RFC 6052)</label><input type="text" id="nPfx" class="mono" value="64:ff9b::/96" style="width:240px" spellcheck="false"></div>
+    <button data-npfx="64:ff9b::/96" title="Well-known prefix, RFC 6052">Well-known</button>
+    <button data-npfx="64:ff9b:1::/48" title="Local-use prefix, RFC 8215">Local-use</button>
+  </div>
+  <label class="small" for="nIn" style="margin-top:10px">IPv4 addresses (→ IPv6) or IPv6 addresses (→ embedded IPv4), one per line</label>
+  <textarea id="nIn" spellcheck="false" style="min-height:110px">192.0.2.33
+198.51.100.7
+64:ff9b::cb00:7105
+64:ff9b::c000:aa
+2002:cb00:7105::1</textarea>
+  <div class="row"><button class="primary" id="nGo">Convert</button><span style="flex:1"></span><button id="nCopy">Copy results</button></div>
+  <div id="nOut"></div>
+  <p class="note">NAT64 lets IPv6-only clients reach IPv4 servers: DNS64 answers with the server's IPv4 inside the prefix, and the NAT64 gateway translates. To find a network's prefix, look up <span class="mono">ipv4only.arpa</span> AAAA (RFC 7050) and paste the answer here. 464XLAT (RFC 6877) uses the same mapping.</p>
+</div>
+
+<div class="pane" id="pane-site" hidden>
+  <div class="row" style="margin-top:0;align-items:flex-end">
+    <div class="field"><label class="small" for="sPfx">Site prefix — a ULA /48 or your delegated /48 – /60</label><input type="text" id="sPfx" class="mono" style="width:250px" spellcheck="false" placeholder="fd12:3456:789a::/48"></div>
+    <button id="sUla" title="Random Global ID, RFC 4193">New random ULA</button>
+    <div class="field"><label class="small" for="sStyle">Subnet ID</label><select id="sStyle"><option value="dec">VLAN as written (VLAN 120 → :120::)</option><option value="hex">VLAN in hex (VLAN 120 → :78::)</option><option value="seq">Sequential (0, 1, 2…)</option></select></div>
+    <div class="field"><label class="small" for="sIf">Interface name</label><input type="text" id="sIf" value="vlan{id}" style="width:120px" spellcheck="false" title="{id} = VLAN ID, {name} = name"></div>
+  </div>
+  <label class="small" for="sVl" style="margin-top:10px">Networks — one per line: VLAN ID and name</label>
+  <textarea id="sVl" spellcheck="false" style="min-height:110px">10 Staff
+20 Voice
+30 Guest Wi-Fi
+99 Management</textarea>
+  <div class="row"><button class="primary" id="sGo">Plan</button><label class="chk"><input type="checkbox" id="sEui"> Router address from EUI-64 instead of ::1</label><span style="flex:1"></span><button id="sCopy">Copy script</button></div>
+  <div id="sOut"></div>
+</div>
+
+<div class="pane" id="pane-isp" hidden>
+  <div class="row" style="margin-top:0;align-items:flex-end">
+    <div class="field"><label class="small" for="iAlloc">Your allocation</label><input type="text" id="iAlloc" class="mono" value="2001:db8::/32" style="width:200px" spellcheck="false"></div>
+    <div class="field"><label class="small" for="iDel">Each subscriber gets</label><select id="iDel"><option value="48">/48 — 65,536 LANs</option><option value="52">/52 — 4,096 LANs</option><option value="56" selected>/56 — 256 LANs</option><option value="60">/60 — 16 LANs</option><option value="64">/64 — 1 LAN</option></select></div>
+    <div class="field"><label class="small" for="iAcc">Access</label><select id="iAcc"><option value="ppp">PPPoE</option><option value="ipoe">IPoE (DHCPv6-PD)</option></select></div>
+    <div class="field"><label class="small" for="iGrow">Growth headroom</label><select id="iGrow"><option value="0">none</option><option value="25" selected>+25%</option><option value="50">+50%</option><option value="100">×2</option><option value="300">×4</option></select></div>
+    <div class="field"><label class="small" for="iInfra">Infrastructure block</label><select id="iInfra"><option value="0">none</option><option value="48" selected>first /48</option><option value="44">first /44</option><option value="40">first /40</option></select></div>
+  </div>
+  <div class="grid2" style="margin-top:12px">
+    <div><label class="small" for="iR">Routers (BNG / POP) — one per line: name and subscribers</label><textarea id="iR" spellcheck="false" style="min-height:120px">BNG-North 3000
+BNG-South 1200
+POP-East 400</textarea></div>
+    <div class="opts">
+      <label class="chk"><input type="checkbox" id="iWan" checked><span>Numbered WAN<small id="iWanS"></small></span></label>
+      <label class="chk"><input type="checkbox" id="iNib" checked><span>Nibble boundaries<small>Round pools and aggregates to multiples of 4 bits: readable prefixes and clean ip6.arpa delegation (RIPE-690). Costs address space.</small></span></label>
+      <label class="chk"><input type="checkbox" id="iBh" checked><span>Blackhole each aggregate<small>Traffic to unassigned prefixes is dropped on the router instead of looping back upstream.</small></span></label>
+    </div>
+  </div>
+  <div class="row"><button class="primary" id="iGo">Plan</button></div>
+  <div id="iOut"></div>
+  <div id="iScriptBox" hidden>
+    <div class="row" style="align-items:flex-end;margin-top:18px">
+      <h2 style="margin:0 0 4px">RouterOS script</h2><span style="flex:1"></span>
+      <div class="field"><label class="small" for="iWho">Router</label><select id="iWho" data-nosave></select></div>
+      <div class="field" id="iProfW"><label class="small" for="iProf">PPP profile</label><input type="text" id="iProf" value="default" style="width:130px" spellcheck="false"></div>
+      <div class="field" id="iIfW" hidden><label class="small" for="iIf">Access interface</label><input type="text" id="iIf" value="vlan100" style="width:130px" spellcheck="false"></div>
+      <div class="field"><label class="small" for="iVer">RouterOS</label><select id="iVer"><option value="717">v7.17+</option><option value="7">v7.0 – 7.16</option><option value="6">v6</option></select></div>
+      <button id="iCopy">Copy</button><button id="iDl">Download .rsc</button>
+    </div>
+    <pre id="iScript" class="script"></pre>
+  </div>
+  <p class="note">How it works: each router gets one aggregate to announce upstream (iBGP / OSPF) holding its delegation pool and, with numbered WAN, its WAN pool. Pools are sized for the subscribers plus headroom, rounded up to a power of two (and to a nibble), so a router can grow without renumbering. RIPE-690 recommends a /56 or /48 per customer, kept stable. RouterOS pools hand prefixes out dynamically, so a subscriber can get a different one after reconnecting — assign fixed prefixes from RADIUS (Delegated-IPv6-Prefix) if they need to stay put.</p>
+</div>
+
+<div class="pane" id="pane-rdns" hidden>
+  <div class="row" style="margin-top:0;align-items:flex-end">
+    <div class="field"><label class="small" for="rZone">Zone prefix</label><input type="text" id="rZone" class="mono" value="2001:db8:abcd::/48" style="width:220px" spellcheck="false"></div>
+    <div class="field"><label class="small" for="rFmt">Output</label><select id="rFmt"><option value="bind">BIND zone file</option><option value="abs">Absolute records</option><option value="unbound">Unbound local-data-ptr</option></select></div>
+    <div class="field"><label class="small" for="rTtl">TTL</label><input type="number" id="rTtl" value="3600" min="0" style="width:90px"></div>
+    <div class="field"><label class="small" for="rNs">Name server for SOA / NS (optional)</label><input type="text" id="rNs" placeholder="ns1.example.net" style="width:200px" spellcheck="false"></div>
+  </div>
+  <label class="small" for="rIn" style="margin-top:10px">Records — one per line: address and hostname, either order</label>
+  <textarea id="rIn" spellcheck="false" style="min-height:110px">2001:db8:abcd::1 gw.example.net
+2001:db8:abcd:10::53 ns1.example.net
+2001:db8:abcd:10::25 mail.example.net
+2001:db8:abcd:20::1 vlan20-gw.example.net</textarea>
+  <div class="row"><button class="primary" id="rGo">Build</button><label class="chk"><input type="checkbox" id="rFwd"> Also output forward AAAA records</label><span style="flex:1"></span><button id="rCopy">Copy</button><button id="rDl">Download</button></div>
+  <div id="rOut"></div>
+</div>
+</div>
+
+<script>
+/* ---------- tabs ---------- */
+const TABS = [['ins', 'Inspect'], ['bulk', 'Bulk convert'], ['eui', 'EUI-64 / SLAAC'], ['nat', 'NAT64 & IPv4'], ['site', 'ULA & VLAN plan'], ['isp', 'ISP delegation'], ['rdns', 'Reverse DNS']];
+const OUT = { ins: 'insOut', bulk: 'bOut', eui: 'eOut', nat: 'nOut', site: 'sOut', isp: 'iOut', rdns: 'rOut' };
+$('#tabs').innerHTML = TABS.map(([k, n]) => `<button class="tab" data-t="${k}">${n}</button>`).join('');
+function tab(t){
+  TABS.forEach(([k]) => $('#pane-' + k).hidden = k !== t); $$('#tabs .tab').forEach(b => b.classList.toggle('on', b.dataset.t === t));
+  setParam('tab', t === 'ins' ? '' : t);
+  if (!$('#' + OUT[t]).innerHTML) RUN[t]();
+}
+$('#tabs').onclick = e => { const b = e.target.closest('.tab'); if (b) tab(b.dataset.t); };
+
+/* ---------- shared ---------- */
+const M64 = (1n << 64n) - 1n, M32 = 0xffffffffn;
+const num = n => n.toLocaleString();
+const badge = (c, t) => `<span class="b b-${c}">${esc(t)}</span>`;
+const LV = { ok: ['ok', 'OK'], info: ['info', 'Info'], warn: ['warn', 'Check'], bad: ['bad', 'Problem'] };
+const RANK = { bad: 0, warn: 1, info: 2, ok: 3 };
+const msgList = ms => ms.length ? `<ul class="msgs">${[...ms].sort((a, b) => RANK[a[0]] - RANK[b[0]]).map(([l, t]) => `<li>${badge(...LV[l])}<span>${t}</span></li>`).join('')}</ul>` : '';
+const tiles = ts => `<div class="tiles">${ts.map(([l, v, s]) => `<div class="tile"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s ?? ''}</div></div>`).join('')}</div>`;
+const kv = o => `<div class="kv">${Object.entries(o).filter(([, x]) => x != null).map(([k, x]) => `<div>${k}</div><div>${x}</div>`).join('')}</div>`;
+const txt = s => `<span class="t">${s}</span>`;
+const err = s => `<div class="err">${s}</div>`;
+const cidr6 = (n, p) => `${fmtIPv6(n)}/${p}`;
+const net6 = (n, p) => n & maskOf(p, 6);
+const nibs = n => n.toString(16).padStart(32, '0');
+const arpa = (n, p = 128) => nibs(n).slice(0, p / 4).split('').reverse().join('.') + (p ? '.' : '') + 'ip6.arpa';
+const v4s = n => fmtIPv4(Number(BigInt(n) & M32));
+const bytesOf = (n, len) => Array.from({ length: len }, (_, i) => Number((n >> BigInt((len - 1 - i) * 8)) & 0xffn));
+const fmtMac = b => b.map(x => x.toString(16).padStart(2, '0')).join(':');
+const iidStr = iid => bytesOf(iid, 8).reduce((a, x, i) => a + (i && !(i % 2) ? ':' : '') + x.toString(16).padStart(2, '0'), '');
+const calcLink = c => `<a href="../subnet-calc/?q=${encodeURIComponent(c)}" class="mono">${esc(c)}</a>`;
+const insLink = a => `<a href="?q=${encodeURIComponent(a)}" data-q="${esc(a)}" class="mono">${esc(a)}</a>`;
+const SN_BASE = parseIPv6('ff02::1:ff00:0'), LL = parseIPv6('fe80::');
+const plural = (n, w, s = 's') => `${num(n)} ${w}${n == 1 ? '' : s}`;
+
+// RFC 5952 §5: mixed notation, for addresses with a known embedded IPv4
+function mixed(n){
+  const g = ipv6Groups(n).slice(0, 6).map(x => x.toString(16));
+  let bs = -1, bl = 0;
+  for (let i = 0; i < 6;) { if (g[i] === '0') { let j = i; while (j < 6 && g[j] === '0') j++; if (j - i > bl && j - i > 1) { bs = i; bl = j - i; } i = j; } else i++; }
+  const v4 = v4s(n);
+  return bs < 0 ? g.join(':') + ':' + v4 : g.slice(0, bs).join(':') + '::' + g.slice(bs + bl).join(':') + (bs + bl < 6 ? ':' : '') + v4;
+}
+// what RFC 5952 would change in the text as typed
+function rfc5952(text, n){
+  const out = [], t = text.toLowerCase(), g = ipv6Groups(n);
+  if (/[A-F]/.test(text)) out.push('use lowercase hex (§4.3)');
+  if (/(^|:)0[0-9a-f]/.test(t)) out.push('drop leading zeros (§4.1)');
+  let bs = -1, bl = 0;
+  for (let i = 0; i < 8;) { if (!g[i]) { let j = i; while (j < 8 && !g[j]) j++; if (j - i > bl) { bs = i; bl = j - i; } i = j; } else i++; }
+  const parts = t.split('::'), cnt = x => x ? x.split(':').reduce((a, y) => a + (y.includes('.') ? 2 : 1), 0) : 0;
+  if (parts.length === 1) { if (bl > 1) out.push(`shorten the ${bl} zero groups with :: (§4.2.1)`); }
+  else { const head = cnt(parts[0]), gap = 8 - head - cnt(parts[1]);
+    if (gap === 1) out.push('don’t use :: for a single zero group (§4.2.2)');
+    else if (head !== bs || gap !== bl) out.push('put :: on the longest run of zero groups — the first if tied (§4.2.3)'); }
+  return out;
+}
+
+/* ---------- address registry (IANA special-purpose + well-known blocks), longest match wins ---------- */
+const REG = [
+  ['::/128', 'Unspecified', 'RFC 4291', 'The “no address” address: the source of DAD probes and DHCPv6 requests before a host has an address. Never a destination.', false],
+  ['::1/128', 'Loopback', 'RFC 4291', 'This host itself, like 127.0.0.1. Never leaves the machine.', false],
+  ['::ffff:0:0/96', 'IPv4-mapped', 'RFC 4291', 'How dual-stack sockets show an IPv4 peer. Internal to the host — never seen on the wire.', false],
+  ['::ffff:0:0:0/96', 'IPv4-translated', 'RFC 2765', 'The old SIIT translation format, replaced by RFC 6052 prefixes.', false],
+  ['::/96', 'IPv4-compatible (deprecated)', 'RFC 4291', 'Deprecated automatic-tunnel format. Shouldn’t appear in a modern network.', false],
+  ['64:ff9b::/96', 'NAT64 well-known prefix', 'RFC 6052', 'An IPv4 address synthesized by DNS64 for a NAT64 gateway: the last 32 bits are the IPv4 destination.', true],
+  ['64:ff9b:1::/48', 'NAT64 local-use prefix', 'RFC 8215', 'For an operator’s own IPv4/IPv6 translation (NAT64, 464XLAT). Not routed between networks.', false],
+  ['100::/64', 'Discard-only', 'RFC 6666', 'A sink for remote-triggered blackholing: routes pointing here drop the traffic.', false],
+  ['2001::/23', 'IETF protocol assignments', 'RFC 2928', 'Reserved for IETF protocols; the specific blocks inside are listed separately.', false],
+  ['2001::/32', 'Teredo', 'RFC 4380', 'IPv6 tunnelled over UDP/IPv4 through NAT. Mostly retired — Windows turned it off by default.', null],
+  ['2001:1::1/128', 'Port Control Protocol anycast', 'RFC 7723', 'Anycast address PCP clients use to find a server.', true],
+  ['2001:1::2/128', 'TURN anycast', 'RFC 8155', 'Anycast address for discovering TURN relays.', true],
+  ['2001:2::/48', 'Benchmarking', 'RFC 5180', 'For lab benchmarking only — must not be routed.', false],
+  ['2001:3::/32', 'AMT', 'RFC 7450', 'Automatic Multicast Tunneling relays.', true],
+  ['2001:4:112::/48', 'AS112-v6', 'RFC 7535', 'Anycast sink for stray reverse-DNS queries.', true],
+  ['2001:10::/28', 'ORCHID (deprecated)', 'RFC 4843', 'Cryptographic host identifiers, replaced by ORCHIDv2.', false],
+  ['2001:20::/28', 'ORCHIDv2', 'RFC 7343', 'Cryptographic host identifiers (HIP) — identifiers, not routable locators.', true],
+  ['2001:30::/28', 'Drone Remote ID (DET)', 'RFC 9374', 'DRIP Entity Tags that identify unmanned aircraft.', true],
+  ['2001:db8::/32', 'Documentation', 'RFC 3849', 'Reserved for examples and docs, never routed. Replace it with real addresses before deploying.', false],
+  ['3fff::/20', 'Documentation', 'RFC 9637', 'The larger documentation block (2024), for examples that need more than a /32. Never routed.', false],
+  ['2002::/16', '6to4', 'RFC 3056', '6to4 tunnel prefix: bits 16–47 are the site’s IPv4. The public relay anycast was deprecated (RFC 7526).', null],
+  ['2620:4f:8000::/48', 'Direct Delegation AS112', 'RFC 7534', 'AS112 sink for DNAME-redirected queries.', true],
+  ['5f00::/16', 'SRv6 SIDs', 'RFC 9602', 'Segment Routing over IPv6 segment identifiers — used inside an SR domain, not on the internet.', false],
+  ['fc00::/7', 'Unique local (ULA)', 'RFC 4193', 'Private addressing, like RFC 1918: routed inside your network, never on the internet.', false],
+  ['fe80::/10', 'Link-local', 'RFC 4291', 'Valid on one link only. Every IPv6 interface has one and routers use them as next hops. Needs a zone (%eth0) to be used.', false],
+  ['fec0::/10', 'Site-local (deprecated)', 'RFC 3879', 'Deprecated in 2004 — use ULA (fd00::/8) instead.', false],
+  ['ff00::/8', 'Multicast', 'RFC 4291', 'A group address. IPv6 has no broadcast: multicast does that job.', null],
+  ['2000::/3', 'Global unicast', 'RFC 4291', 'Public internet address space.', true],
+].map(([c, name, rfc, note, glob]) => ({ ...parseCIDR(c), name, rfc, note, glob })).sort((a, b) => b.p - a.p);
+const classify = n => REG.find(r => (n & r.mask) === r.net) || { name: 'Reserved by IETF', rfc: 'RFC 4291', note: 'Outside every assigned range — not in use on the internet.', glob: false };
+const IID_OK = new Set(['Global unicast', 'Unique local (ULA)', 'Link-local', 'Documentation', '6to4', 'Site-local (deprecated)', 'Benchmarking']);
+const MIXED_OK = new Set(['IPv4-mapped', 'IPv4-translated', 'IPv4-compatible (deprecated)', 'NAT64 well-known prefix']);
+const canonOf = n => ['IPv4-mapped', 'IPv4-translated'].includes(classify(n).name) ? mixed(n) : fmtIPv6(n);
+
+function embeddedV4(n){   // IPv4 addresses a known format carries: [{ how, v4, extra }]
+  const r = classify(n), out = [], g = ipv6Groups(n), low = Number(n & M32), iid = n & M64;
+  if (MIXED_OK.has(r.name)) out.push({ how: r.name, v4: low });
+  if (r.name === 'Teredo') out.push({ how: 'Teredo client (public IPv4)', v4: (~low) >>> 0, extra: `UDP port ${(~g[5]) & 0xffff}${g[4] & 0x8000 ? ' · cone NAT' : ''}` }, { how: 'Teredo server', v4: Number((n >> 64n) & M32) });
+  if (r.name === '6to4') out.push({ how: '6to4 site', v4: Number((n >> 80n) & M32) });
+  if (IID_OK.has(r.name) && ((iid >> 32n) | 0x02000000n) === 0x02005efen) out.push({ how: 'ISATAP interface ID', v4: Number(iid & M32) });
+  return out;
+}
+function iidInfo(n){   // what the low 64 bits say about how the address was made
+  const iid = n & M64, g = ipv6Groups(n).slice(4).map(x => x.toString(16));
+  if (iid === 0n) return { kind: 'Subnet-router anycast', c: 'info', note: 'An all-zero interface ID is the subnet-router anycast address of its /64 (RFC 4291 §2.6.1): any router on the link answers it. Don’t give it to a host.' };
+  if (((iid >> 24n) & 0xffffn) === 0xfffen) {
+    const b = bytesOf(iid, 8); b[0] ^= 2; const mac = fmtMac([...b.slice(0, 3), ...b.slice(5)]);
+    return { kind: 'EUI-64 — built from a MAC', c: 'warn', mac, note: `The MAC is readable from the address, so the device can be followed across networks.${b[0] & 2 ? ' That MAC is locally administered (randomized or virtual).' : ''} Routers, switches and IoT still do this; desktop and phone OSes use random IDs.` };
+  }
+  if (((iid >> 32n) | 0x02000000n) === 0x02005efen) return { kind: 'ISATAP', c: 'info', note: `An ISATAP tunnel interface carrying IPv4 ${v4s(iid)}.` };
+  if (iid >= 0xfdffffffffffff80n && iid <= 0xfdffffffffffffffn) return { kind: 'Reserved subnet anycast', c: 'info', note: 'The top 128 interface IDs of a /64 are reserved anycast addresses (RFC 2526); …ffff:fffe is Mobile IPv6 home agents.' };
+  if (iid < 0x10000n) return { kind: 'Low-byte (hand-assigned)', c: 'info', note: 'A short ID like ::1 or ::53, typical for routers and servers. Easy to remember — and the first thing scanners try (RFC 7707).' };
+  if (g[0] !== '0' && g.every(x => /^\d{1,3}$/.test(x) && +x <= 255)) return { kind: 'IPv4 written in the IID', c: 'info', note: `Reads as ${g.join('.')}: a manual scheme that mirrors the host’s IPv4. Easy to guess (RFC 7707).` };
+  if (iid < 0x100000000n) return { kind: 'Small number', c: 'info', note: `Mostly zero bits: hand-assigned or handed out in sequence by DHCPv6. Could also be an IPv4 in hex (${v4s(iid)}).` };
+  return { kind: 'Randomized', c: 'ok', note: 'No visible pattern: a temporary privacy address (RFC 8981), a stable-privacy ID (RFC 7217) or a DHCPv6 lease. It doesn’t reveal the MAC.' };
+}
+
+/* ---------- multicast ---------- */
+const MC_SCOPE = { 1: 'Interface-local', 2: 'Link-local', 3: 'Realm-local', 4: 'Admin-local', 5: 'Site-local', 8: 'Organization-local', 14: 'Global' };
+const MC_FIXED = { 'ff01::1': 'All nodes (this interface)', 'ff02::1': 'All nodes on the link', 'ff01::2': 'All routers (this interface)', 'ff02::2': 'All routers on the link — router solicitations go here', 'ff05::2': 'All routers in the site',
+  'ff02::5': 'OSPFv3 all SPF routers', 'ff02::6': 'OSPFv3 designated routers', 'ff02::9': 'RIPng routers', 'ff02::a': 'EIGRP routers', 'ff02::d': 'PIM routers', 'ff02::12': 'VRRP', 'ff02::16': 'MLDv2-capable routers — MLDv2 reports go here',
+  'ff02::6a': 'All snoopers (RFC 4286)', 'ff02::6b': 'PTP peer delay (IEEE 1588)', 'ff02::1:2': 'All DHCPv6 relay agents and servers', 'ff05::1:3': 'All DHCPv6 servers in the site', 'ff02::1:3': 'LLMNR name resolution' };
+const MC_VAR = { 0xfb: 'mDNS', 0xc: 'SSDP / UPnP discovery', 0x101: 'NTP', 0x181: 'PTP primary (IEEE 1588)' };
+function mcInfo(n){
+  const f = Number((n >> 116n) & 0xfn), sc = Number((n >> 112n) & 0xfn), key = fmtIPv6(n), gid = n & ((1n << 112n) - 1n);
+  const sn = (n >> 24n) << 24n === SN_BASE, plen = Number((n >> 96n) & 0xffn), pre = ((n >> 32n) & M64) << 64n;
+  const name = MC_FIXED[key] || (f === 0 && gid < 0x10000n && MC_VAR[Number(gid)] ? `${MC_VAR[Number(gid)]} (any scope)` : null)
+    || (sn ? `Solicited-node — neighbor discovery and DAD for addresses ending in …${(n & 0xffffffn).toString(16).padStart(6, '0').replace(/^(..)/, '$1:')}` : null);
+  const flags = [f & 1 ? 'T: transient (dynamically assigned)' : 'T=0: permanent, IANA-assigned', f & 2 ? 'P: unicast-prefix-based (RFC 3306)' : null, f & 4 ? 'R: embedded rendezvous point (RFC 3956)' : null, f & 8 ? 'high bit set (reserved — invalid)' : null].filter(Boolean);
+  const o = { 'Scope': `${sc.toString(16)} ${txt('— ' + (MC_SCOPE[sc] || 'unassigned / reserved'))}`, 'Flags': `${f.toString(16)} ${txt('— ' + flags.join(' · '))}`, 'Group': name ? txt(esc(name)) : txt('<span class="muted">not a well-known group</span>') };
+  if (f & 2 && plen <= 64) {
+    if (!(f & 4)) Object.assign(o, f === 3 && plen === 0 && !pre ? { 'Range': txt('Source-specific multicast (ff3x::/96, RFC 4607)') } : { 'Owner prefix': calcLink(cidr6(net6(pre, plen), plen)), 'Group ID': '0x' + (n & M32).toString(16) });
+    else Object.assign(o, f === 7 ? { 'Rendezvous point': insLink(fmtIPv6(net6(pre, plen) | ((n >> 104n) & 0xfn))), 'RP prefix': calcLink(cidr6(net6(pre, plen), plen)), 'Group ID': '0x' + (n & M32).toString(16) } : { 'Embedded RP': txt('invalid — R needs the P and T flags set') });
+  }
+  o['Ethernet MAC'] = '33:33:' + fmtMac(bytesOf(n & M32, 4));
+  return o;
+}
+
+/* ---------- Inspect ---------- */
+// address, /prefix, %zone, [addr]:port, URL, ip6.arpa name or Windows ipv6-literal.net name
+function parseInput(raw){
+  let s = String(raw).trim(), port = null, zone = null, p = null, via = null, m;
+  if (!s) return null;
+  if ((m = s.match(/^[a-z][a-z0-9+.-]*:\/\/\[([^\]]+)\](?::(\d+))?/i))) { s = decodeURIComponent(m[1]); port = m[2] ?? null; via = 'URL'; }
+  else if ((m = s.match(/^\[([^\]]+)\](?::(\d+))?$/))) { s = m[1]; port = m[2] ?? null; }
+  if ((m = s.replace(/\.$/, '').match(/^((?:[0-9a-f]\.){1,32})ip6\.arpa$/i))) {
+    const nb = m[1].slice(0, -1).split('.').reverse();
+    return { n: BigInt('0x' + nb.join('').padEnd(32, '0')), p: nb.length < 32 ? nb.length * 4 : null, text: null, via: 'ip6.arpa name' };
+  }
+  if ((m = s.match(/^([0-9a-f-]+?)(?:s([0-9a-z]+))?\.ipv6-literal\.net$/i))) { s = m[1].replace(/-/g, ':'); zone = m[2] ?? null; via = 'Windows UNC name'; }
+  if ((m = s.match(/^(.*?)\/(\d{1,3})$/))) { s = m[1]; p = +m[2]; if (p > 128) return { err: 'A prefix length must be between 0 and 128.' }; }
+  if ((m = s.match(/^([^%]+)%(.+)$/))) { s = m[1]; zone = m[2]; }
+  const n = parseIPv6(s);
+  return n == null ? null : { n, p, zone, port, text: s, via };
+}
+const EXAMPLES = [['2001:db8::1', 'Documentation'], ['fe80::21a:2bff:fe3c:4d5e%eth0', 'EUI-64 link-local'], ['2001:0:4136:e378:8000:63bf:3fff:fdd2', 'Teredo'], ['ff02::1:ff3c:4d5e', 'Solicited-node'],
+  ['64:ff9b::192.0.2.33', 'NAT64'], ['2002:cb00:7105::1', '6to4'], ['ff7e:940:2001:db8:beef:feed:0:1234', 'Embedded RP'], ['2001:DB8:0:0:1:0:0:1', 'Not RFC 5952'], ['[fd12:3456:789a:10::53]:53', 'ULA with port'], ['8.b.d.0.1.0.0.2.ip6.arpa', 'Reverse zone']];
+function inspect(){
+  const raw = $('#q').value.trim(), out = $('#insOut');
+  setParam('q', raw);
+  if (!raw) { out.innerHTML = `<p class="muted" style="margin:14px 0 8px">Paste any IPv6 address — compressed or not, with a /prefix, %zone, [brackets]:port, a URL, an ip6.arpa name or a Windows ipv6-literal.net name. Or try one:</p><div class="chips">${EXAMPLES.map(([a, l]) => `<span class="chip" data-ex="${esc(a)}" title="${esc(a)}">${esc(l)}</span>`).join('')}</div>`; return; }
+  const r = parseInput(raw);
+  if (!r || r.err) { out.innerHTML = err(esc(r?.err || 'That isn’t a valid IPv6 address. Examples: 2001:db8::1, fe80::1%eth0, [2001:db8::1]:443, 2001:db8::/48.')); return; }
+  const { n, p, zone } = r, reg = classify(n), mc = reg.name === 'Multicast', isPfx = p != null && p < 128 && net6(n, p) === n;
+  const canon = canonOf(n), mixOK = MIXED_OK.has(reg.name), z = zone ? '%' + zone : '';
+  const bin = (() => { const s = n.toString(2).padStart(128, '0'), cut = p ?? 64; let o = ''; for (let i = 0; i < 128; i++) { if (i && !(i % 16)) o += i % 32 ? ':' : '<br>'; o += i < cut ? `<b>${s[i]}</b>` : `<span class="muted">${s[i]}</span>`; } return o; })();
+  let style = '';
+  if (r.text != null && r.text !== fmtIPv6(n) && !(mixOK && r.text === mixed(n))) {
+    const is = rfc5952(r.text, n);
+    style = msgList([['warn', `Not in RFC 5952 canonical form${is.length ? ': ' + is.join('; ') : ''}. Write <b class="mono">${esc(canon)}</b>.`]]);
+  } else if (r.text != null) style = msgList([['ok', 'Written in canonical RFC 5952 form.']]);
+  const addr = kv({
+    [isPfx ? 'Prefix' : 'Compressed']: isPfx ? `<b>${calcLink(cidr6(n, p))}</b>` : `<b>${esc(canon + z)}</b>`,
+    'Expanded': fullIPv6(n),
+    'Mixed notation': mixOK && canon !== mixed(n) ? mixed(n) : null,
+    'All-hex form': canon !== fmtIPv6(n) ? fmtIPv6(n) : null,
+    'In prefix': p != null && !isPfx ? `${calcLink(cidr6(net6(n, p), p))} ${txt('<span class="muted">(host bits set)</span>')}` : null,
+    'Size': isPfx ? txt(p <= 64 ? `${num(1n << BigInt(64 - p))} /64 networks` : `${num(1n << BigInt(128 - p))} addresses`) : null,
+    'Read from': r.via ? txt(esc(r.via)) : null,
+    'Zone': zone ? `${esc(zone)} ${txt('<span class="muted">— the interface the address belongs to</span>')}` : null,
+    'Port': r.port,
+    'URL': isPfx ? null : esc(`http://[${canon}${zone ? '%25' + zone : ''}]${r.port ? ':' + r.port : ''}/`),
+    'Windows UNC': isPfx ? null : esc(`${fmtIPv6(n).replace(/:/g, '-')}${zone ? 's' + zone : ''}.ipv6-literal.net`),
+    [isPfx ? 'Reverse zone' : 'Reverse (PTR)']: isPfx ? (p % 4 ? txt('<span class="muted">not on a nibble boundary — split into /' + Math.ceil(p / 4) * 4 + ' zones</span>') : arpa(n, p)) : arpa(n),
+    'Integer': n.toString(),
+    'Hex': '0x' + nibs(n),
+    'Binary': `<span class="bits">${bin}</span>`,
+  });
+  const ula = reg.name === 'Unique local (ULA)', gl = reg.glob;
+  const type = kv({
+    'Type': `${badge(gl ? 'ok' : gl === false ? 'warn' : 'info', reg.name)} ${txt(`<span class="muted">${reg.rfc}</span>`)}`,
+    'Block': reg.net != null ? calcLink(cidr6(reg.net, reg.p)) : null,
+    'About': txt(esc(reg.note)),
+    'Internet-routable': txt(gl ? 'Yes' : gl === false ? 'No' : 'Depends on use'),
+    'Scope': mc ? null : txt(reg.name === 'Link-local' ? 'Link — this segment only' : reg.name === 'Loopback' ? 'Host' : ['Unspecified', 'IPv4-mapped', 'IPv4-translated'].includes(reg.name) ? '— not used on the wire' : ula ? 'Global scope, private use' : 'Global'),
+    'ULA Global ID': ula ? (((n >> 120n) & 0xffn) === 0xfcn ? txt('<span class="muted">fc00::/8 — reserved, L bit is 0; self-assigned ULAs are fd00::/8</span>') : ((n >> 80n) & 0xffffffffffn).toString(16).padStart(10, '0')) : null,
+    'Subnet ID': ula && !isPfx ? ipv6Groups(n)[3].toString(16) : null,
+  });
+  let right = '';
+  if (mc) right += `<h3>Multicast group</h3>${kv(mcInfo(n))}`;
+  else if (IID_OK.has(reg.name) && !isPfx) {
+    const ii = iidInfo(n), sn = SN_BASE | (n & 0xffffffn);
+    right += `<h3>Interface ID</h3>${kv({ 'Interface ID': iidStr(n & M64), 'Looks like': badge(ii.c, ii.kind), 'MAC': ii.mac ? `<b>${ii.mac}</b>` : null, 'Means': txt(esc(ii.note)) })}
+      <h3>Neighbor discovery</h3>${kv({ 'Solicited-node group': insLink(fmtIPv6(sn)), 'Its Ethernet MAC': '33:33:' + fmtMac(bytesOf(sn & M32, 4)), 'Subnet-router anycast': insLink(fmtIPv6(net6(n, 64))) })}`;
+  }
+  const e4 = embeddedV4(n);
+  if (e4.length) right += `<h3>Embedded IPv4</h3>${kv(Object.fromEntries(e4.map(e => [e.how, `<b>${fmtIPv4(e.v4)}</b>${e.extra ? ' ' + txt('<span class="muted">' + esc(e.extra) + '</span>') : ''}${v4Special(e.v4) ? ' ' + badge('mute', v4Special(e.v4)) : ''}`])))}`;
+  else if (reg.name === 'NAT64 local-use prefix') right += `<h3>Embedded IPv4</h3><p class="muted">Depends on your prefix length — <a href="#" data-tab="nat">decode it in NAT64 &amp; IPv4</a>.</p>`;
+  const lens = [...new Set([32, 40, 48, 56, 64, p].filter(L => L != null && L < 128 && (!isPfx || L <= p)))].sort((a, b) => a - b);
+  out.innerHTML = `<div class="grid2" style="margin-top:14px"><div><h2>Address</h2>${addr}${style}</div><div><h2>Type</h2>${type}${right}</div></div>
+    <h3 style="margin-top:18px">${isPfx ? 'Parent prefixes' : 'Containing prefixes'}</h3><div class="tablewrap"><table><thead><tr><th>Prefix</th><th>Reverse zone</th><th>Size</th></tr></thead><tbody>
+    ${lens.map(L => `<tr><td>${calcLink(cidr6(net6(n, L), L))}</td><td class="mono">${L % 4 ? '<span class="muted">not on a nibble</span>' : arpa(net6(n, L), L)}</td><td>${L <= 64 ? num(1n << BigInt(64 - L)) + ' /64s' : num(1n << BigInt(128 - L)) + ' addresses'}</td></tr>`).join('')}</tbody></table></div>`;
+}
+
+/* ---------- Bulk ---------- */
+const EXTRACT = /(?<![\w.])\[?([0-9a-f]*:[0-9a-f:.]*)(?:%[\w.-]+)?\]?(?:\/(\d{1,3}))?(?![\w:.])/gi;
+let BULK = [];
+function bulk(){
+  const raw = $('#bIn').value, lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean), list = lines.length > 0 && lines.every(l => !/\s/.test(l));
+  let items = []; const bad = [];
+  if (list) for (const l of lines) { const r = parseInput(l); if (r && !r.err) items.push({ input: l, n: r.n, p: r.p, text: r.text }); else bad.push(l); }
+  else for (const m of raw.matchAll(EXTRACT)) {
+    let t = m[1], n = parseIPv6(t);
+    if (n == null) { t = t.replace(/\.+$/, ''); n = parseIPv6(t); }
+    if (n == null && /[^:]:$/.test(t)) { t = t.slice(0, -1); n = parseIPv6(t); }
+    if (n != null) items.push({ input: m[0].replace(/^\[|\]$/g, ''), n, p: m[2] != null && +m[2] <= 128 ? +m[2] : null, text: t });
+  }
+  const total = items.length, keepP = $('#bPfx').checked, f = $('#bFmt').value;
+  if ($('#bUniq').checked) { const seen = new Set(); items = items.filter(it => { const k = `${it.n}/${keepP ? it.p : ''}`; return !seen.has(k) && seen.add(k); }); }
+  if ($('#bSort').checked) items.sort((a, b) => cmpBig(a.n, b.n) || (a.p ?? 129) - (b.p ?? 129));
+  items.forEach(it => { it.reg = classify(it.n); it.issues = it.text != null && it.text !== fmtIPv6(it.n) && !(MIXED_OK.has(it.reg.name) && it.text === mixed(it.n)) ? (rfc5952(it.text, it.n).join('; ') || 'differs from ' + canonOf(it.n)) : ''; });
+  const conv = it => { const P = keepP && it.p != null ? '/' + it.p : '';
+    return f === 'x' ? fullIPv6(it.n) + P : f === 'p' ? (keepP && it.p != null && it.p % 4 === 0 && it.p < 128 && net6(it.n, it.p) === it.n ? arpa(it.n, it.p) : arpa(it.n)) : f === 'u' ? `[${canonOf(it.n)}]` : f === 'n' ? cidr6(net6(it.n, 64), 64) : canonOf(it.n) + P; };
+  BULK = items.map(it => ({ ...it, out: conv(it) }));
+  const types = Object.entries(items.reduce((a, it) => (a[it.reg.name] = (a[it.reg.name] || 0) + 1, a), {})).sort((a, b) => b[1] - a[1]);
+  const nonCanon = items.filter(it => it.issues).length, shown = BULK.slice(0, 500);
+  $('#bOut').innerHTML = `<div class="row" style="margin-top:14px"><b>${plural(items.length, 'address', 'es')}</b>${list ? '' : '&nbsp;found in the text'}${total > items.length ? ` · ${plural(total - items.length, 'duplicate')} removed` : ''}${nonCanon ? ` · <span class="b b-warn">${num(nonCanon)} not RFC 5952</span>` : ''}
+      <span style="flex:1"></span><button id="bCopy">Copy</button><button id="bCsv">CSV</button></div>
+    ${bad.length ? err(`Not valid IPv6 (${bad.length}): <span class="mono">${esc(bad.slice(0, 8).join(' · '))}${bad.length > 8 ? ' …' : ''}</span>`) : ''}
+    ${types.length ? `<p class="muted" style="margin:8px 0 0">${types.map(([k, c]) => `${esc(k)} <b>${c}</b>`).join(' · ')}</p>` : ''}
+    <pre style="margin-top:10px;max-height:280px">${esc(BULK.map(b => b.out).join('\n')) || '(none found)'}</pre>
+    ${items.length ? `<div class="tablewrap" style="margin-top:12px;max-height:420px;overflow:auto"><table><thead><tr><th>#</th><th>Found</th><th>Compressed</th><th>Type</th><th>RFC 5952</th></tr></thead><tbody>
+    ${shown.map((it, i) => `<tr><td class="muted">${i + 1}</td><td class="mono">${esc(it.input)}</td><td>${insLink(canonOf(it.n))}${it.p != null ? `<span class="mono">/${it.p}</span>` : ''}</td><td>${esc(it.reg.name)}</td><td>${it.issues ? `<span class="b b-warn">fix</span> <span class="muted">${esc(it.issues)}</span>` : it.text == null ? '<span class="muted">—</span>' : '<span class="b b-ok">ok</span>'}</td></tr>`).join('')}</tbody>
+    ${BULK.length > shown.length ? `<tfoot><tr><td colspan="5" class="muted">First ${shown.length} of ${num(BULK.length)} — Copy and CSV include all.</td></tr></tfoot>` : ''}</table></div>` : ''}`;
+  $('#bCopy').onclick = e => copyText(BULK.map(b => b.out).join('\n'), e.target);
+  $('#bCsv').onclick = () => download('ipv6-addresses.csv', toCSV([['found', 'compressed', 'expanded', 'prefix', 'type', 'rfc5952_issues', 'output'], ...BULK.map(b => [b.input, canonOf(b.n), fullIPv6(b.n), b.p ?? '', b.reg.name, b.issues, b.out])]), 'text/csv');
+}
+
+/* ---------- EUI-64 / SLAAC ---------- */
+function macBytes(s){ const h = String(s).trim().toLowerCase().replace(/[:.\-\s]/g, ''); return /^[0-9a-f]{12}$/.test(h) ? h.match(/../g).map(x => parseInt(x, 16)) : null; }
+const macToIID = b => [b[0] ^ 2, b[1], b[2], 0xff, 0xfe, b[3], b[4], b[5]].reduce((a, x) => (a << 8n) | BigInt(x), 0n);
+let EUI = [];
+function eui(){
+  const out = $('#eOut'), P = parseCIDR($('#ePfx').value), msgs = [];
+  if (!P || P.v !== 6) { out.innerHTML = err('Enter an IPv6 prefix such as 2001:db8:1:10::/64.'); EUI = []; return; }
+  if (P.p > 64) { out.innerHTML = err(`A /${P.p} is too long: SLAAC appends a 64-bit interface ID, so the prefix must be a /64.`); EUI = []; return; }
+  const pre = net6(P.net, 64), bad = [];
+  if (P.p < 64) msgs.push(['warn', `SLAAC needs exactly a /64 (RFC 4862) — the addresses use ${esc(cidr6(pre, 64))}, the first /64 of the /${P.p}.`]);
+  EUI = [];
+  for (const raw of $('#eIn').value.split('\n')) {
+    const l = raw.trim(); if (!l) continue;
+    const r = parseInput(l);
+    if (r && !r.err) { const iid = r.n & M64, ii = iidInfo(r.n); EUI.push({ input: l, dir: 'v6', mac: ii.mac || null, kind: ii.kind, iid }); continue; }
+    const b = macBytes(l);
+    if (!b) { bad.push(l); continue; }
+    if (b[0] & 1) { bad.push(l + ' (multicast MAC)'); continue; }
+    EUI.push({ input: l, dir: 'mac', mac: fmtMac(b), iid: macToIID(b), local: !!(b[0] & 2), b });
+  }
+  EUI.forEach(e => { e.addr = pre | e.iid; e.ll = LL | e.iid; e.sn = SN_BASE | (e.iid & 0xffffffn); });
+  if (bad.length) msgs.push(['bad', `Not a MAC or IPv6 address: <span class="mono">${esc(bad.slice(0, 6).join(' · '))}</span>`]);
+  if (EUI.some(e => e.local)) msgs.push(['info', 'Some MACs are locally administered (randomized or virtual), so their interface ID has the U/L bit cleared rather than set.']);
+  const first = EUI.find(e => e.dir === 'mac'), fb = first?.b;
+  const steps = first ? [[first.mac, 'MAC'], [`${fmtMac(fb.slice(0, 3))}:ff:fe:${fmtMac(fb.slice(3))}`, 'insert ff:fe in the middle'],
+    [`${fmtMac([fb[0] ^ 2, ...fb.slice(1, 3)])}:ff:fe:${fmtMac(fb.slice(3))}`, `flip the U/L bit (0x02) of the first byte: ${fb[0].toString(16).padStart(2, '0')} → ${(fb[0] ^ 2).toString(16).padStart(2, '0')}`],
+    [iidStr(first.iid), 'interface ID'], [fmtIPv6(first.addr), `${fmtIPv6(pre)} + interface ID`]] : [];
+  const sw = Math.max(0, ...steps.map(x => x[0].length)) + 3;
+  const how = first ? `<h3>How it's built</h3><pre style="white-space:pre;word-break:normal;overflow:auto">${esc(steps.map(([a, b]) => a.padEnd(sw) + b).join('\n'))}</pre>` : '';
+  out.innerHTML = msgList(msgs) + how + (EUI.length ? `<div class="tablewrap" style="margin-top:12px"><table><thead><tr><th>Input</th><th>MAC</th><th>Interface ID</th><th>Address in ${esc(cidr6(pre, 64))}</th><th>Link-local</th><th>Solicited-node group</th></tr></thead><tbody>
+    ${EUI.map(e => `<tr><td class="mono">${esc(e.input)}</td><td class="mono">${e.mac ? `<b>${e.mac}</b>` : `<span class="muted t">none — ${esc(e.kind.toLowerCase())}</span>`}</td><td class="mono">${iidStr(e.iid)}</td><td>${insLink(fmtIPv6(e.addr))}</td><td>${insLink(fmtIPv6(e.ll))}</td><td>${insLink(fmtIPv6(e.sn))}</td></tr>`).join('')}</tbody></table></div>` : '');
+}
+
+/* ---------- NAT64 & embedded IPv4 ---------- */
+const NAT_LENS = [32, 40, 48, 56, 64, 96], WKP = parseIPv6('64:ff9b::');
+function embed4(prefix, L, v4){   // RFC 6052 §2.2: IPv4 bytes after the prefix, skipping bits 64-71 (the u octet)
+  const b = bytesOf(prefix, 16).map((x, i) => i < L / 8 ? x : 0);
+  let pos = L / 8; for (const o of [v4 >>> 24, (v4 >>> 16) & 255, (v4 >>> 8) & 255, v4 & 255]) { if (pos === 8) pos++; b[pos++] = o; }
+  return b.reduce((a, x) => (a << 8n) | BigInt(x), 0n);
+}
+function extract4(n, L){
+  const b = bytesOf(n, 16), o = []; let pos = L / 8;
+  while (o.length < 4) { if (pos === 8) pos++; o.push(b[pos++]); }
+  return { v4: ((o[0] << 24) >>> 0) + (o[1] << 16) + (o[2] << 8) + o[3], u: b[8], tail: b.slice(pos).some(x => x) };
+}
+let NAT = [];
+function nat(){
+  const out = $('#nOut'), P = parseCIDR($('#nPfx').value), msgs = [];
+  if (!P || P.v !== 6 || !NAT_LENS.includes(P.p)) { out.innerHTML = err('The NAT64 prefix must be IPv6 with a length of /32, /40, /48, /56, /64 or /96 (RFC 6052).'); NAT = []; return; }
+  const wkp = P.p === 96 && P.net === WKP, L = P.p, bad = [];
+  if (L === 96 && (P.net >> 56n) & 0xffn) msgs.push(['bad', 'Bits 64–71 of the prefix must be zero (RFC 6052 §2.2) — this prefix can’t be used for NAT64.']);
+  if (L === 96 && !wkp && classify(P.net).name !== 'NAT64 local-use prefix') msgs.push(['info', 'A network-specific /96 — fine; make sure DNS64 and the NAT64 gateway use the same prefix.']);
+  NAT = [];
+  for (const raw of $('#nIn').value.split('\n')) {
+    const l = raw.trim(); if (!l) continue;
+    const v4 = parseIPv4(l);
+    if (v4 != null) {
+      const syn = embed4(P.net, L, v4), sp = v4Special(v4), doc = /^Documentation/.test(sp || '');
+      NAT.push({ input: l, v4, v6: syn, res: fmtIPv6(syn), alt: L === 96 ? mixed(syn) : '', other: [`::ffff:${fmtIPv4(v4)}`, `2002:${(v4 >>> 16).toString(16)}:${(v4 & 0xffff).toString(16)}::/48`],
+        note: wkp && sp && !doc ? ['warn', `${sp}: the well-known prefix must not carry non-global IPv4 (RFC 6052 §3.1) — use a network-specific prefix`] : sp ? ['mute', sp] : null });
+      continue;
+    }
+    const r = parseInput(l);
+    if (!r || r.err) { bad.push(l); continue; }
+    const n = r.n, row = { input: l, v6: n, other: [] };
+    if ((n & P.mask) === P.net) { const e = extract4(n, L); Object.assign(row, { v4: e.v4, res: fmtIPv4(e.v4), how: `NAT64 /${L}`, note: e.u && L < 96 ? ['bad', 'bits 64–71 aren’t zero — not a valid RFC 6052 address'] : e.tail ? ['warn', 'suffix bits after the IPv4 aren’t zero'] : null }); }
+    else { const e = embeddedV4(n)[0]; if (e) Object.assign(row, { v4: e.v4, res: fmtIPv4(e.v4), how: e.how, note: e.extra ? ['mute', e.extra] : null }); else Object.assign(row, { res: '', how: '', note: ['mute', `no IPv4 under ${cidr6(P.net, L)}`] }); }
+    // RFC 7050: the AAAA answer for ipv4only.arpa embeds 192.0.0.170 / .171 — find the prefix that puts it there
+    for (const len of NAT_LENS) { const e = extract4(n, len); if ((e.v4 === 0xc00000aa || e.v4 === 0xc00000ab) && !e.u && !e.tail) { row.found = cidr6(net6(n, len), len); break; } }
+    NAT.push(row);
+  }
+  if (bad.length) msgs.push(['bad', `Not an IPv4 or IPv6 address: <span class="mono">${esc(bad.slice(0, 6).join(' · '))}</span>`]);
+  for (const f of new Set(NAT.filter(r => r.found).map(r => r.found))) msgs.push(['ok', `An ipv4only.arpa answer (RFC 7050): this network’s NAT64 prefix is <b class="mono">${esc(f)}</b>${f === cidr6(P.net, L) ? '.' : ` <button data-npfx="${esc(f)}">Use it</button>`}`]);
+  out.innerHTML = msgList(msgs) + (NAT.length ? `<div class="tablewrap" style="margin-top:12px"><table><thead><tr><th>Input</th><th>Result</th><th>Via</th><th>Other forms</th><th>Notes</th></tr></thead><tbody>
+    ${NAT.map(r => `<tr><td class="mono">${esc(r.input)}</td><td class="mono"><b>${r.v4 != null && !r.how ? insLink(r.res) : esc(r.res)}</b>${r.alt && r.alt !== r.res ? `<div class="muted">${esc(r.alt)}</div>` : ''}</td>
+      <td>${r.how ? esc(r.how) : r.v4 != null ? `NAT64 /${L}` : ''}</td><td class="mono" style="font-size:12px">${r.other.map(esc).join('<br>')}</td><td>${r.note ? `<span class="b b-${r.note[0]}">${esc(r.note[1])}</span>` : ''}</td></tr>`).join('')}</tbody></table></div>` : '');
+}
+
+/* ---------- ULA & VLAN plan ---------- */
+function randomULA(){ const g = [...crypto.getRandomValues(new Uint8Array(5))].reduce((a, x) => (a << 8n) | BigInt(x), 0n); return cidr6((0xfdn << 120n) | (g << 80n), 48); }
+let SITE = '';
+function site(){
+  const out = $('#sOut'), P = parseCIDR($('#sPfx').value), msgs = [];
+  SITE = '';
+  if (!P || P.v !== 6) { out.innerHTML = err('Enter a site prefix such as fd12:3456:789a::/48 — or generate a ULA.'); return; }
+  if (P.p > 64) { out.innerHTML = err(`A /${P.p} is smaller than one network: every LAN needs its own /64, so the site prefix must be /64 or shorter.`); return; }
+  const bits = 64 - P.p, max = 1n << BigInt(bits), style = $('#sStyle').value, pat = $('#sIf').value.trim() || 'vlan{id}', useEui = $('#sEui').checked, bad = [], rows = [];
+  for (const raw of $('#sVl').value.split('\n')) { const l = raw.trim(); if (!l) continue; const m = l.match(/^(\d{1,4})(?:[\s,;:]+(.*))?$/); if (m) rows.push({ id: +m[1], name: (m[2] || '').trim() }); else bad.push(l); }
+  rows.forEach((r, i) => {
+    r.sid = style === 'dec' ? BigInt(parseInt(String(r.id), 16)) : style === 'hex' ? BigInt(r.id) : BigInt(i);
+    r.fits = r.sid < max; r.net = P.net | (r.sid << 64n);
+    r.iface = pat.replace(/\{id\}/g, r.id).replace(/\{name\}/g, r.name.replace(/[^\w.-]+/g, '-'));
+  });
+  const reg = classify(P.net), ula = reg.name === 'Unique local (ULA)', gid = ((P.net >> 80n) & 0xffffffffffn).toString(16).padStart(10, '0');
+  if (ula) {
+    if (((P.net >> 120n) & 0xffn) === 0xfcn) msgs.push(['bad', 'fc00::/8 is reserved (its L bit is 0): ULAs you pick yourself live in fd00::/8. Generate one.']);
+    else msgs.push(['ok', `ULA Global ID <b class="mono">${gid}</b>. Pick it once at random and keep it — that's what lets two networks merge later without renumbering (RFC 4193).`]);
+    if (P.p !== 48) msgs.push(['info', `ULA prefixes are /48s (RFC 4193); this is a /${P.p}.`]);
+    msgs.push(['info', 'ULA is private: hosts also need a global prefix to reach the IPv6 internet. With only ULA and IPv4, hosts prefer IPv4 for names that have both (RFC 6724).']);
+  } else if (reg.name === 'Documentation') msgs.push(['warn', 'That’s a documentation prefix — use your delegated prefix, or generate a ULA.']);
+  else if (reg.name === 'Global unicast') msgs.push(['info', 'A global prefix: these networks are reachable from the internet with no NAT in front, so allow only established / related traffic inbound at the edge. If it arrives by DHCPv6-PD, RouterOS can number LANs itself with <span class="mono">from-pool=</span>.']);
+  else msgs.push(['warn', `${esc(reg.name)} space isn’t meant for numbering LANs.`]);
+  const nofit = rows.filter(r => !r.fits);
+  if (nofit.length) msgs.push(['bad', `Don’t fit the ${bits}-bit subnet ID of a /${P.p}: ${esc(nofit.map(r => 'VLAN ' + r.id).join(', '))}.${style === 'dec' ? ' “As written” makes VLAN 100 subnet 0x100 — try hex or sequential IDs, or a bigger prefix.' : ' Use a bigger prefix.'}`]);
+  const dup = rows.filter((r, i) => r.fits && rows.findIndex(x => x.sid === r.sid) !== i);
+  if (dup.length) msgs.push(['bad', `Two networks would share a /64: ${esc(dup.map(r => 'VLAN ' + r.id).join(', '))}.`]);
+  if (rows.some(r => r.id < 1 || r.id > 4094)) msgs.push(['warn', 'VLAN IDs run from 1 to 4094.']);
+  if (bad.length) msgs.push(['bad', `Lines without a VLAN ID: <span class="mono">${esc(bad.slice(0, 5).join(' · '))}</span>`]);
+  const ok = rows.filter(r => r.fits);
+  SITE = ok.length ? ['/ipv6 address', ...ok.map(r => useEui ? `add address=${cidr6(r.net, 64)} eui-64=yes interface=${r.iface} advertise=yes${r.name ? ` comment="${r.name.replace(/["\\]/g, '')}"` : ''}`
+    : `add address=${cidr6(r.net | 1n, 64)} interface=${r.iface} advertise=yes${r.name ? ` comment="${r.name.replace(/["\\]/g, '')}"` : ''}`)].join('\n') : '';
+  out.innerHTML = tiles([['Site prefix', `/${P.p}`, esc(cidr6(P.net, P.p))], ['/64 networks', num(max), `${bits}-bit subnet ID`], ['Planned', num(ok.length), `of ${plural(rows.length, 'line')}`], ...(ula ? [['ULA Global ID', gid, 'random, RFC 4193']] : [])])
+    + msgList(msgs) + (rows.length ? `<div class="tablewrap" style="margin-top:14px"><table><thead><tr><th>VLAN</th><th>Name</th><th>Interface</th><th>Network</th><th>Router address</th></tr></thead><tbody>
+    ${rows.map(r => `<tr><td>${r.id}</td><td>${esc(r.name)}</td><td class="mono">${esc(r.iface)}</td><td>${r.fits ? calcLink(cidr6(r.net, 64)) : badge('bad', 'doesn’t fit')}</td><td class="mono">${r.fits ? (useEui ? `${esc(fmtIPv6(r.net))}<span class="muted">&lt;EUI-64&gt;</span>` : esc(fmtIPv6(r.net | 1n))) : ''}</td></tr>`).join('')}</tbody></table></div>` : '')
+    + (SITE ? `<h3>RouterOS</h3><pre class="script">${esc(SITE)}</pre><p class="note"><span class="mono">advertise=yes</span> sends router advertisements for the /64, so hosts configure themselves by SLAAC.</p>` : '');
+}
+
+/* ---------- ISP delegation ---------- */
+let ISP = null, ISPS = '';
+function ispPlan(){
+  const msgs = [], A = parseCIDR($('#iAlloc').value);
+  if (!A || A.v !== 6) return { error: 'Enter your IPv6 allocation, e.g. 2001:db8::/32.' };
+  const D = +$('#iDel').value, grow = +$('#iGrow').value, nib = $('#iNib').checked, wan = $('#iWan').checked, ppp = $('#iAcc').value === 'ppp', infraP = +$('#iInfra').value;
+  if (D <= A.p) return { error: `A /${A.p} can’t hold /${D} delegations — enter your whole allocation or give subscribers less.` };
+  const rnd = p => nib ? Math.floor(p / 4) * 4 : p, routers = [], bad = [];
+  for (const raw of $('#iR').value.split('\n')) { const l = raw.trim(); if (!l) continue; const m = l.match(/^(.*?)[\s,;:]+(\d+)$/); if (m && +m[2] > 0) routers.push({ name: m[1].trim() || `router-${routers.length + 1}`, subs: +m[2] }); else bad.push(l); }
+  if (!routers.length) return { error: 'Add at least one router and its subscriber count, e.g. “BNG-1 2000”.' };
+  for (const r of routers) {
+    r.need = Math.ceil(r.subs * (1 + grow / 100));
+    const bits = Math.ceil(Math.log2(r.need));
+    r.pdP = rnd(D - bits);
+    r.wanP = !wan ? null : ppp ? rnd(64 - bits) : 56;   // PPPoE: a /64 per subscriber link · IPoE: a /56 of access-network /64s
+    r.aggP = rnd(r.wanP == null ? r.pdP : Math.min(r.pdP, r.wanP) - 1);
+    r.cap = 1n << BigInt(D - r.pdP);
+  }
+  // carve from the start of the allocation, each block aligned to its own size; infrastructure first, then routers largest-first
+  const used = []; let cur = A.net;
+  const place = p => { if (p < A.p) return null; const size = blockSize(p, 6), s = (cur + size - 1n) / size * size; if (s + size - 1n > A.last) return null; cur = s + size; used.push({ v: 6, s, e: s + size - 1n }); return s; };
+  let infra = null;
+  if (infraP && infraP > A.p) infra = { p: infraP, net: place(infraP) };
+  else if (infraP) msgs.push(['warn', `A /${A.p} is too small to set aside a /${infraP} for infrastructure — skipped.`]);
+  [...routers].sort((a, b) => a.aggP - b.aggP).forEach(r => {
+    r.net = place(r.aggP); r.fits = r.net != null; if (!r.fits) return;
+    const [big, small] = r.wanP != null && r.wanP < r.pdP ? ['wan', 'pd'] : ['pd', 'wan'], first = big === 'pd' ? r.pdP : r.wanP;
+    r[big === 'pd' ? 'pd' : 'wanNet'] = r.net;
+    if (r.wanP != null) r[small === 'pd' ? 'pd' : 'wanNet'] = r.net + blockSize(first, 6);
+  });
+  const ok = routers.filter(r => r.fits), usedSize = used.reduce((a, u) => a + u.e - u.s + 1n, 0n);
+  const free = subtractRanges([{ v: 6, s: A.net, e: A.last }], used).flatMap(r => rangeToBlocks(r.s, r.e, 6)).sort((a, b) => a.p - b.p || cmpBig(a.net, b.net));
+  const big = Math.min(...routers.map(r => r.aggP)), more = big >= A.p ? free.reduce((a, b) => a + (b.p <= big ? 1n << BigInt(big - b.p) : 0n), 0n) : 0n;
+  if (A.n !== A.net) msgs.push(['info', `Using the network ${esc(cidr6(A.net, A.p))}.`]);
+  if (['Documentation'].includes(classify(A.net).name)) msgs.push(['info', `${esc(cidr6(A.net, A.p))} is a documentation prefix — replace it with your RIR or upstream allocation.`]);
+  const nofit = routers.filter(r => !r.fits);
+  if (nofit.length) msgs.push(['bad', `Doesn’t fit in ${esc(cidr6(A.net, A.p))}: ${esc(nofit.map(r => `${r.name} (/${r.aggP})`).join(', '))}. Use a larger allocation, smaller delegations or less headroom${nib ? ', or turn off nibble boundaries' : ''}.`]);
+  if (bad.length) msgs.push(['bad', `Lines without a subscriber count: <span class="mono">${esc(bad.slice(0, 5).join(' · '))}</span>`]);
+  if (D === 64) msgs.push(['warn', 'A /64 is a single LAN: the customer’s router can’t number a second network (guest Wi-Fi, IoT). RIPE-690 recommends at least a /56 for homes and a /48 for businesses.']);
+  if (D === 60) msgs.push(['info', 'A /60 gives 16 LANs. RIPE-690 recommends a /56 for residential customers so there’s room to grow.']);
+  if (!wan) msgs.push(['info', 'Unnumbered WAN: the CPE’s WAN keeps only a link-local address and the delegated prefix is routed to it. That works, but you can’t ping or manage CPEs over IPv6 from outside.']);
+  if (!nib) msgs.push(['info', 'Without nibble boundaries the pools don’t line up with ip6.arpa zones, so one pool’s reverse DNS spans several zones.']);
+  if (ok.length && !msgs.some(([l]) => l === 'bad' || l === 'warn')) msgs.push(['ok', `Every router fits, with room for ${plural(more, `more /${big} router block`)}.`]);
+  return { A, D, ppp, wan, nib, routers, infra, free, more, big, pct: Number(usedSize * 10000n / A.size) / 100, msgs };
+}
+function isp(){
+  const out = $('#iOut'), box = $('#iScriptBox'), ppp = $('#iAcc').value === 'ppp';
+  $('#iWanS').textContent = ppp ? 'A /64 for each subscriber’s PPP link (remote-ipv6-prefix-pool), so every CPE gets a global WAN address.' : 'A /56 of /64s per router for access networks; the first goes on the access interface and CPEs take a WAN address by SLAAC.';
+  $('#iProfW').hidden = !ppp; $('#iIfW').hidden = ppp;
+  const P = ISP = ispPlan();
+  if (P.error) { out.innerHTML = err(esc(P.error)); box.hidden = true; ISP = null; return; }
+  const subs = P.routers.reduce((a, r) => a + r.subs, 0), cap = P.routers.filter(r => r.fits).reduce((a, r) => a + r.cap, 0n), blk = (n, p) => `<span class="mono">${cidr6(n, p)}</span>`;
+  out.innerHTML = tiles([['Allocation', `/${P.A.p}`, esc(cidr6(P.A.net, P.A.p))], ['Per subscriber', `/${P.D}`, `${num(1n << BigInt(64 - P.D))} /64 LAN${P.D === 64 ? '' : 's'} each`], ['Subscribers', num(subs), `${num(cap)} delegations of room`],
+      ['Allocation used', `${P.pct}%`, `${plural(P.routers.filter(r => r.fits).length + (P.infra ? 1 : 0), 'block')}`], ['Room to grow', num(P.more), `more /${P.big} router blocks`]])
+    + msgList(P.msgs)
+    + `<div class="tablewrap" style="margin-top:14px"><table><thead><tr><th>Block</th><th>Subscribers</th><th>Aggregate — announce</th><th>Delegation pool</th><th>WAN</th><th>Capacity</th></tr></thead><tbody>
+      ${P.infra ? `<tr><td><b>Infrastructure</b></td><td class="muted">—</td><td>${blk(P.infra.net, P.infra.p)}</td><td colspan="3" class="muted">loopbacks, point-to-point links, servers</td></tr>` : ''}
+      ${P.routers.map(r => `<tr><td><b>${esc(r.name)}</b></td><td>${num(r.subs)} <span class="muted">→ ${num(r.need)}</span></td><td>${r.fits ? blk(r.net, r.aggP) : badge('bad', `doesn’t fit (/${r.aggP})`)}</td>
+        <td>${r.fits ? blk(r.pd, r.pdP) : `/${r.pdP}`} <span class="muted">of /${P.D}s</span></td><td>${r.wanP == null ? '<span class="muted">unnumbered</span>' : r.fits ? blk(r.wanNet, r.wanP) : `/${r.wanP}`}</td>
+        <td>${num(r.cap)} <span class="muted">(${Math.round(r.subs / Number(r.cap) * 100)}% used today)</span></td></tr>`).join('')}</tbody></table></div>`
+    + (P.infra ? `<h3>Infrastructure layout</h3>${kv({ 'Loopbacks': `${cidr6(P.infra.net, 64)} ${txt('<span class="muted">— a /128 per router</span>')}`, 'Point-to-point links': `${cidr6(P.infra.net + (1n << 72n), 56)} ${txt('<span class="muted">— a /64 per link, configured as /127 (RFC 6164): 256 links</span>')}`, 'Management & servers': `${cidr6(P.infra.net + (1n << 76n), 52)} ${txt('<span class="muted">— 4,096 /64 networks</span>')}` })}` : '')
+    + (P.free.length ? `<h3>Free space</h3><pre style="max-height:200px">${esc(P.free.slice(0, 6).map(b => cidr6(b.net, b.p)).join('\n') + (P.free.length > 6 ? `\n… ${P.free.length - 6} smaller blocks` : ''))}</pre>` : '');
+  const prev = $('#iWho').value;
+  $('#iWho').innerHTML = '<option value="all">All routers</option>' + P.routers.map((r, i) => r.fits ? `<option value="${i}">${esc(r.name)}</option>` : '').join('');
+  if ([...$('#iWho').options].some(o => o.value === prev)) $('#iWho').value = prev;
+  box.hidden = !P.routers.some(r => r.fits);
+  ispScript();
+}
+function ispScript(){
+  const P = ISP; if (!P) return;
+  const ver = $('#iVer').value, who = $('#iWho').value, clean = s => String(s).replace(/["\\]/g, '').trim(), bh = $('#iBh').checked;
+  const prof = clean($('#iProf').value) || 'default', iface = clean($('#iIf').value).replace(/\s+/g, '') || 'vlan100';
+  const L = ['# IPv6 prefix delegation - NetOps Toolkit'];
+  P.routers.forEach((r, i) => {
+    if (!r.fits || (who !== 'all' && +who !== i)) return;
+    const nm = r.name.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || `router-${i + 1}`, name = clean(r.name);
+    L.push('', `# ===== ${name}: paste on this router =====`, `# Announce ${cidr6(r.net, r.aggP)} | ${r.cap} x /${P.D} delegations${r.wanP == null ? '' : P.ppp ? ` | ${1n << BigInt(64 - r.wanP)} x /64 WAN links` : ` | access /64s from ${cidr6(r.wanNet, r.wanP)}`}`);
+    L.push('/ipv6 pool', `add name=pd-${nm} prefix=${cidr6(r.pd, r.pdP)} prefix-length=${P.D}`);
+    if (P.ppp) {
+      if (r.wanP != null) L.push(`add name=wan-${nm} prefix=${cidr6(r.wanNet, r.wanP)} prefix-length=64`);
+      L.push('/ppp profile', `set [find name="${prof}"] dhcpv6-pd-pool=pd-${nm}${r.wanP != null ? ` remote-ipv6-prefix-pool=wan-${nm}` : ''}`);
+    } else {
+      if (r.wanP != null) L.push('/ipv6 address', `add address=${fmtIPv6(r.wanNet | 1n)}/64 interface=${iface} advertise=yes comment="${name} subscriber WAN (SLAAC)"`);
+      L.push('/ipv6 dhcp-server', `add name=pd-${nm} interface=${iface} ${ver === '717' ? 'prefix-pool' : 'address-pool'}=pd-${nm}`);
+    }
+    if (bh) L.push('/ipv6 route', `add dst-address=${cidr6(r.net, r.aggP)} ${ver === '6' ? 'type=unreachable' : 'blackhole'} comment="${name} aggregate: drop unassigned space"`);
+  });
+  ISPS = L.join('\n');
+  $('#iScript').textContent = ISPS;
+}
+
+/* ---------- Reverse DNS ---------- */
+let RDNS = '';
+function rdns(){
+  const out = $('#rOut'), Z = parseCIDR($('#rZone').value);
+  RDNS = '';
+  if (!Z || Z.v !== 6) { out.innerHTML = err('Enter the prefix the reverse zone covers, e.g. 2001:db8:abcd::/48.'); return; }
+  const fmt = $('#rFmt').value, ttl = Math.max(0, Math.floor(+$('#rTtl').value || 0)) || 3600, ns = $('#rNs').value.trim().replace(/\.$/, ''), fwd = $('#rFwd').checked;
+  const zl = Math.min(128, Math.ceil(Z.p / 4) * 4), recs = [], bad = [], outside = [], msgs = [];
+  for (const raw of $('#rIn').value.split('\n')) {
+    const l = raw.replace(/#.*/, '').trim(); if (!l) continue;
+    let a = null, h = null;
+    for (const t of l.split(/[\s,]+/)) { const r = a == null ? parseInput(t) : null; if (r && !r.err) a = r.n; else if (!h && !t.includes(':') && /^(?=.*[a-z])[a-z0-9_-]+(\.[a-z0-9_-]+)*\.?$/i.test(t)) h = t.replace(/\.$/, ''); }
+    if (a == null || !h) bad.push(l); else if ((a & Z.mask) !== Z.net) outside.push(l); else recs.push({ n: a, host: h });
+  }
+  recs.sort((x, y) => cmpBig(x.n, y.n));
+  const zones = new Map(); for (const r of recs) { const k = net6(r.n, zl); if (!zones.has(k)) zones.set(k, []); zones.get(k).push(r); }
+  const rel = n => zl === 128 ? '@' : nibs(n).slice(zl / 4).split('').reverse().join('.');
+  const L = [`${fmt === 'unbound' ? '#' : ';'} Reverse DNS for ${cidr6(Z.net, Z.p)} - NetOps Toolkit`];
+  if (fmt === 'bind') {
+    const serial = new Date().toISOString().slice(0, 10).replace(/-/g, '') + '01', hm = ns ? `hostmaster.${ns.split('.').length > 2 ? ns.split('.').slice(1).join('.') : ns}.` : '';
+    for (const k of zones.size ? zones.keys() : [net6(Z.net, zl)]) {
+      L.push('', `$ORIGIN ${arpa(k, zl)}.`, `$TTL ${ttl}`);
+      if (ns) L.push(`@ IN SOA ${ns}. ${hm} ( ${serial} 3600 900 1209600 3600 )`, `@ IN NS ${ns}.`);
+      const rs = zones.get(k) || [], w = Math.max(0, ...rs.map(r => rel(r.n).length));
+      rs.forEach(r => L.push(`${rel(r.n).padEnd(w)} IN PTR ${r.host}.`));
+    }
+  } else if (fmt === 'abs') recs.forEach(r => L.push(`${arpa(r.n)}. ${ttl} IN PTR ${r.host}.`));
+  else recs.forEach(r => L.push(`local-data-ptr: "${fmtIPv6(r.n)} ${r.host}"`));
+  if (fwd && recs.length) {
+    L.push('', fmt === 'unbound' ? '# Forward records' : '; Forward records - these belong in each name’s own zone');
+    recs.forEach(r => L.push(fmt === 'unbound' ? `local-data: "${r.host}. ${ttl} IN AAAA ${fmtIPv6(r.n)}"` : `${r.host}. ${ttl} IN AAAA ${fmtIPv6(r.n)}`));
+  }
+  RDNS = L.join('\n');
+  if (bad.length) msgs.push(['bad', `Need an address and a hostname: <span class="mono">${esc(bad.slice(0, 5).join(' · '))}</span>`]);
+  if (outside.length) msgs.push(['warn', `Outside ${esc(cidr6(Z.net, Z.p))}, left out: <span class="mono">${esc(outside.slice(0, 5).join(' · '))}</span>`]);
+  if (Z.p % 4) msgs.push(['info', `ip6.arpa delegates on nibble (4-bit) boundaries, so a /${Z.p} is ${1 << (zl - Z.p)} zones of /${zl}${fmt === 'bind' ? ` — ${plural(zones.size, 'zone')} with records below` : ''}. Each one is delegated to you separately.`]);
+  const multi = new Set(recs.filter((r, i) => i && recs[i - 1].n === r.n).map(r => fmtIPv6(r.n)));
+  if (multi.size) msgs.push(['warn', `More than one PTR for ${esc([...multi].slice(0, 4).join(', '))} — allowed, but most software uses only one.`]);
+  if (recs.length) msgs.push(['info', 'Give each name a matching AAAA too: mail servers and many logs check that the forward and reverse agree (forward-confirmed reverse DNS).']);
+  out.innerHTML = msgList(msgs) + `<p class="muted" style="margin:12px 0 0"><b>${plural(recs.length, 'record')}</b>${fmt === 'bind' ? ` in ${plural(Math.max(1, zones.size), 'zone')}` : ''}</p><pre class="script">${esc(RDNS)}</pre>`;
+}
+
+/* ---------- wiring ---------- */
+const RUN = { ins: inspect, bulk, eui, nat, site, isp, rdns };
+let deb;
+$$('.pane').forEach(pane => {
+  const t = pane.id.slice(5), later = () => { clearTimeout(deb); deb = setTimeout(RUN[t], 200); };
+  pane.addEventListener('input', e => e.target.matches('input, textarea') && later());
+  pane.addEventListener('change', e => e.target.matches('select, input[type=checkbox]') && later());
+});
+$('#go').onclick = inspect; $('#bGo').onclick = bulk; $('#eGo').onclick = eui; $('#nGo').onclick = nat; $('#sGo').onclick = site; $('#iGo').onclick = isp; $('#rGo').onclick = rdns;
+$('#q').addEventListener('keydown', e => e.key === 'Enter' && inspect());
+$('#insOut').addEventListener('click', e => { const c = e.target.closest('[data-ex]'); if (c) { $('#q').value = c.dataset.ex; inspect(); } });
+document.addEventListener('click', e => {
+  const a = e.target.closest('a[data-q], a[data-tab], button[data-npfx]'); if (!a) return;
+  e.preventDefault();
+  if (a.dataset.npfx) { $('#nPfx').value = a.dataset.npfx; nat(); return; }
+  if (a.dataset.tab) { tab(a.dataset.tab); return; }
+  $('#q').value = a.dataset.q; tab('ins'); inspect(); scrollTo({ top: 0, behavior: 'smooth' });
+});
+$('#eCsv').onclick = () => EUI.length && download('slaac-eui64.csv', toCSV([['input', 'mac', 'interface_id', 'address', 'link_local', 'solicited_node'], ...EUI.map(e => [e.input, e.mac || '', iidStr(e.iid), fmtIPv6(e.addr), fmtIPv6(e.ll), fmtIPv6(e.sn)])]), 'text/csv');
+$('#nCopy').onclick = e => NAT.length && copyText(NAT.map(r => `${r.input}\t${r.res || '-'}`).join('\n'), e.target);
+$('#sUla').onclick = () => { $('#sPfx').value = randomULA(); $('#sPfx').dispatchEvent(new Event('input', { bubbles: true })); site(); };
+$('#sCopy').onclick = e => SITE && copyText(SITE, e.target);
+$('#iCopy').onclick = e => ISPS && copyText(ISPS, e.target);
+$('#iDl').onclick = () => ISPS && download('ipv6-delegation.rsc', ISPS + '\n');
+$('#rCopy').onclick = e => RDNS && copyText(RDNS, e.target);
+$('#rDl').onclick = () => { if (!RDNS) return; const Z = parseCIDR($('#rZone').value), f = $('#rFmt').value; download(f === 'unbound' ? 'reverse-ptr.conf' : f === 'abs' ? 'reverse-records.txt' : `${arpa(net6(Z.net, Math.ceil(Z.p / 4) * 4), Math.ceil(Z.p / 4) * 4)}.zone`, RDNS + '\n'); };
+if (window.NetopsHistory) window.NetopsHistory.labeler = root => root.id === 'pane-isp' ? `${$('#iAlloc').value.trim()} → /${$('#iDel').value}` : root.id === 'pane-site' ? $('#sPfx').value.trim() : null;
+if (getParam('q')) $('#q').value = getParam('q');
+tab(TABS.some(([k]) => k === getParam('tab')) ? getParam('tab') : 'ins');
+document.addEventListener('DOMContentLoaded', () => {   // after History restores saved inputs
+  if (!$('#sPfx').value.trim()) $('#sPfx').value = randomULA();
+  RUN[$('#tabs .tab.on').dataset.t]();
+});
+</script>
