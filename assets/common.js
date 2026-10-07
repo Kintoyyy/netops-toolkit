@@ -7,7 +7,10 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function copyText(text, btn){
   try { await navigator.clipboard.writeText(text); }
   catch { const t = document.createElement('textarea'); t.value = text; document.body.appendChild(t); t.select(); document.execCommand('copy'); t.remove(); }
-  if (btn) { const o = btn.textContent; btn.textContent = 'Copied ✓'; setTimeout(() => btn.textContent = o, 1200); }
+  if (btn) {   // remember the real label once, so a second click within the 1.2 s doesn't make "Copied ✓" stick
+    btn.dataset.label ??= btn.textContent; btn.textContent = 'Copied ✓';
+    clearTimeout(btn._copyT); btn._copyT = setTimeout(() => btn.textContent = btn.dataset.label, 1200);
+  }
 }
 function download(name, text, type = 'text/plain'){
   const a = document.createElement('a');

@@ -1,0 +1,450 @@
+<!-- title: MikroTik Burst Calculator | desc: Plan RouterOS queue burst — how long it lasts, when it comes back, what's misconfigured — and watch a simulation of the speed a client actually gets. Generates simple queue, PPP / Hotspot rate-limit and queue tree config. -->
+<style>
+.bq{--s1:#2a78d6;--s2:#eb6834}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .bq{--s1:#3987e5;--s2:#d95926}}
+:root[data-theme="dark"] .bq{--s1:#3987e5;--s2:#d95926}
+.bq .ptab td{vertical-align:middle}
+.bq .ptab input{width:100%;min-width:96px}
+.bq .ptab td:last-child{font-size:12.5px;color:var(--muted);min-width:220px}
+.bq .ptab td.mono{white-space:nowrap;word-break:normal}
+@media (max-width:640px){.bq .ptab th:last-child,.bq .ptab td:last-child{display:none} .bq .ptab input{min-width:68px}}
+.bq select{max-width:100%}
+.bq .kv>div:nth-child(even){font-family:inherit;word-break:normal}
+.bq .rlbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--code-bg)}
+.bq .rlbar .muted{font-size:12px}
+.bq #rlOut{flex:1;min-width:0;font:600 14px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;word-break:break-all;cursor:copy}
+.bq .cfgblk{margin-top:12px}
+.bq .cfgblk .h{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12.5px;color:var(--muted);margin-bottom:4px}
+.bq .cfgblk .h button{padding:3px 10px;font-size:12px}
+.bq .seg{display:inline-flex;flex:none;border:1px solid var(--border);border-radius:7px;overflow:hidden}
+.bq .seg button{border:0;border-radius:0;padding:5px 11px;font-size:13px;background:var(--panel);color:var(--muted)}
+.bq .seg button+button{border-left:1px solid var(--border)}
+.bq .seg button.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.bq .big{font-size:22px;font-weight:600;margin:4px 0 10px}
+.bq .big small{font-size:14px;font-weight:400;color:var(--muted)}
+.bq ul.msgs{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:6px;font-size:13px}
+.bq ul.msgs li{display:flex;gap:8px;align-items:baseline}
+.bq ul.msgs .b{min-width:58px;text-align:center}
+.bq .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px;margin-top:14px}
+.bq .tile{border:1px solid var(--border);border-radius:9px;padding:10px 12px}
+.bq .tile .l{font-size:12px;color:var(--muted)}
+.bq .tile .v{font-size:24px;font-weight:600;margin:2px 0}
+.bq .tile .s{font-size:12px;color:var(--muted)}
+.bq .ctitle{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:18px;font-size:13px}
+.bq .key{display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:12px}
+.bq .key i{display:inline-block;width:16px;border-top:2px solid}
+.bq .key i.dash{border-top-style:dashed}
+.bq .key i.band{width:14px;height:10px;border:0;border-radius:2px;background:color-mix(in srgb,var(--s1) 14%,transparent)}
+.bq .chart{position:relative;margin-top:4px;touch-action:pan-y}
+.bq .chart svg{display:block;width:100%;overflow:visible}
+.bq .chart text{fill:var(--muted);font-size:11px;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.bq .chart text.ref{fill:var(--text)}
+.bq .tip{position:absolute;top:8px;pointer-events:none;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-size:12px;box-shadow:0 6px 20px rgba(0,0,0,.15);white-space:nowrap;z-index:5}
+.bq .tip .r{display:flex;align-items:center;gap:7px;margin-top:3px}
+.bq .tip .r i{display:inline-block;width:12px;border-top:2px solid}
+.bq .tip b{font-variant-numeric:tabular-nums}
+.bq #jobs{min-height:84px}
+.bq #simTable table td{font-variant-numeric:tabular-nums}
+</style>
+<div class="bq">
+<section class="panel">
+  <div class="row" style="margin-top:0">
+    <input type="text" id="paste" class="grow mono" data-nosave placeholder='Paste a rate-limit ("2M/4M 4M/8M 1500k/3M 16/16 8 1M/2M") or a /queue line to load it' spellcheck="false" autocomplete="off">
+    <button id="import">Load</button>
+  </div>
+  <div class="chips" id="presets" style="margin-top:10px"></div>
+  <div class="tablewrap" style="margin-top:12px"><table class="ptab">
+    <thead><tr><th>Parameter</th><th>Upload</th><th>Download</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">max-limit</td><td><input type="text" id="u_max" class="mono" value="2M"></td><td><input type="text" id="d_max" class="mono" value="2M"></td><td>Normal speed cap (MIR) whenever burst is off.</td></tr>
+      <tr><td class="mono">burst-limit</td><td><input type="text" id="u_burst" class="mono" value="4M"></td><td><input type="text" id="d_burst" class="mono" value="4M"></td><td>Replaces max-limit while burst is allowed.</td></tr>
+      <tr><td class="mono">burst-threshold</td><td><input type="text" id="u_thr" class="mono" value="1500k"></td><td><input type="text" id="d_thr" class="mono" value="1500k"></td><td>Burst is allowed while the average rate stays below this.</td></tr>
+      <tr><td class="mono">burst-time</td><td><input type="text" id="u_time" class="mono" value="16s"></td><td><input type="text" id="d_time" class="mono" value="16s"></td><td>Window the average is measured over — not how long the burst lasts.</td></tr>
+      <tr><td class="mono">limit-at</td><td><input type="text" id="u_lim" class="mono" value="1M"></td><td><input type="text" id="d_lim" class="mono" value="1M"></td><td>Guaranteed rate (CIR) when the parent is congested. Doesn't change burst timing.</td></tr>
+    </tbody></table></div>
+  <div class="row">
+    <span class="muted">Want bursts of</span><input type="number" id="want" value="10" min="1" max="3600" style="width:76px"><span class="muted">seconds?</span>
+    <button id="solve">Set burst-time for me</button><span class="muted" id="solveNote"></span>
+  </div>
+  <div class="rlbar">
+    <span class="muted">rate-limit</span>
+    <code id="rlOut" title="Click to copy"></code>
+    <button id="copyRl" title="Copy the rate-limit string for PPP / Hotspot profiles">Copy</button>
+  </div>
+  <p class="note">Rates take RouterOS units: <span class="mono">512k</span>, <span class="mono">1500k</span>, <span class="mono">20M</span>, <span class="mono">1G</span>. Times: <span class="mono">16s</span>, <span class="mono">1m</span>.</p>
+</section>
+
+<div class="grid2" id="results" style="margin-top:16px"></div>
+
+<section class="panel">
+  <div class="row" style="margin-top:0">
+    <h2 style="margin:0 6px 0 0">Simulation</h2>
+    <div class="seg" id="dir" role="group" aria-label="Direction"><button data-d="d">Download</button><button data-d="u">Upload</button></div>
+    <select id="scen" aria-label="Traffic">
+      <option value="docs">Two downloads at 0 s and 17 s (the docs example)</option>
+      <option value="cont">Non-stop download</option>
+      <option value="speed">Speed test: 15 s, every 40 s</option>
+      <option value="web">Web browsing: a page every 6 s</option>
+      <option value="custom">Custom…</option>
+    </select>
+  </div>
+  <div class="row" id="customRow" hidden style="align-items:flex-start">
+    <div class="grow"><label class="small" for="jobs">One transfer per line: start time and size (<span class="mono">4MB</span>, <span class="mono">32Mb</span>, <span class="mono">1GB</span>) or how long it saturates the queue (<span class="mono">15s</span>)</label><textarea id="jobs" spellcheck="false"></textarea></div>
+    <div><label class="small" for="dur">Duration (s)</label><input type="number" id="dur" min="1" max="3600" placeholder="auto" style="width:96px"></div>
+    <div><label class="small" for="cap">Client line speed</label><input type="text" id="cap" class="mono" placeholder="unlimited" style="width:120px"></div>
+  </div>
+  <div class="row">
+    <button class="primary" id="play" style="min-width:92px">▶ Play</button>
+    <select id="speed" aria-label="Playback speed"><option value="1">1×</option><option value="2" selected>2×</option><option value="5">5×</option><option value="10">10×</option></select>
+    <input type="range" id="scrub" class="grow" min="0" max="1" step="0.01" value="0" aria-label="Simulation time">
+    <span class="mono" id="clock" style="min-width:64px;text-align:right">0 s</span>
+  </div>
+  <div class="tiles" id="tiles"></div>
+  <div class="ctitle"><b>Speed</b><span class="key"><i style="border-color:var(--s1)"></i>Actual speed</span><span class="key"><i style="border-color:var(--s2)"></i>Average over burst-time</span><span class="key"><i class="band"></i>Burst allowed</span><span class="key"><i class="dash" style="border-color:var(--s2)"></i>burst-threshold</span></div>
+  <div class="chart" id="c1"></div>
+  <div class="ctitle"><b>Data transferred</b><span class="key"><i style="border-color:var(--s1)"></i>With burst</span><span class="key"><i class="dash" style="border-color:var(--muted)"></i>max-limit only</span></div>
+  <div class="chart" id="c2"></div>
+  <div id="simSummary" style="margin-top:12px"></div>
+  <details style="margin-top:12px"><summary class="muted" style="cursor:pointer">Step-by-step table (as in the MikroTik docs)</summary><div id="simTable" class="tablewrap" style="margin-top:8px;max-height:420px;overflow:auto"></div></details>
+  <p class="note">Every burst-time ÷ 16 the router averages the traffic of the last burst-time; burst is allowed while that average is below burst-threshold, and while it is, burst-limit replaces max-limit. The simulated client always takes everything the queue allows, like the docs' example — real TCP ramps up, so actual bursts can look shorter. MikroTik's own example tables have a few arithmetic slips (the 16 s example's 18 s row adds up to 1625 kbps, not 1500), so from there this simulation, which applies the rule exactly, differs from the printed numbers.</p>
+</section>
+
+<section class="panel">
+  <h2>RouterOS config</h2>
+  <div class="row" style="margin-top:0;align-items:flex-end">
+    <div><label class="small" for="qname">Queue name</label><input type="text" id="qname" value="client-1" style="width:150px"></div>
+    <div><label class="small" for="qtarget">Target</label><input type="text" id="qtarget" class="mono" value="192.168.88.10/32" style="width:170px"></div>
+    <div><label class="small" for="pname">PPP / Hotspot profile</label><input type="text" id="pname" placeholder="auto" style="width:150px"></div>
+    <span style="flex:1"></span><button id="copyCfg">Copy all</button>
+  </div>
+  <div id="cfg"></div>
+  <p class="note">Simple queues and pairs are <b>upload/download</b>; in a <span class="mono">rate-limit</span> string rx is the client's upload and tx its download. The queue-tree lines need mangle rules that set those packet marks.</p>
+</section>
+</div>
+
+<script>
+/* ---------- units ---------- */
+function parseRate(s){
+  const m = String(s ?? '').trim().match(/^(\d+(?:\.\d+)?)\s*([kmg])?(?:bps|bit\/?s|b)?$/i);
+  return m ? +m[1] * ({ k: 1e3, m: 1e6, g: 1e9 }[(m[2] || '').toLowerCase()] || 1) : NaN;
+}
+function parseTime(s){
+  s = String(s ?? '').trim().toLowerCase(); if (!s) return NaN;
+  let m = s.match(/^(\d+):(\d{1,2}):(\d{1,2}(?:\.\d+)?)$/); if (m) return +m[1] * 3600 + +m[2] * 60 + +m[3];
+  if (/^\d+(\.\d+)?$/.test(s)) return +s;
+  let t = 0, ok = false; s.replace(/(\d+(?:\.\d+)?)(ms|h|m|s)/g, (_, n, u) => { ok = true; t += +n * { ms: .001, h: 3600, m: 60, s: 1 }[u]; });
+  return ok ? t : NaN;
+}
+const ros = b => { if (!b) return '0'; for (const [u, m] of [['G', 1e9], ['M', 1e6], ['k', 1e3]]) if (b >= m && Math.abs(b / m - Math.round(b / m)) < 1e-9) return Math.round(b / m) + u; return b >= 1e3 ? +(b / 1e3).toFixed(3) + 'k' : String(Math.round(b)); };
+const fmtRate = b => !(b > 0) ? '0 Mbps' : b >= 1e9 ? `${+(b / 1e9).toFixed(2)} Gbps` : b >= 1e6 ? `${+(b / 1e6).toFixed(2)} Mbps` : b >= 1e3 ? `${+(b / 1e3).toFixed(1)} kbps` : `${Math.round(b)} bps`;
+const fmtData = bits => { const B = bits / 8; return B >= 1e9 ? `${+(B / 1e9).toFixed(2)} GB` : B >= 1e6 ? `${+(B / 1e6).toFixed(B >= 1e8 ? 0 : 1)} MB` : `${+(B / 1e3).toFixed(0)} kB`; };
+const fmtS = s => s == null || !isFinite(s) ? '—' : `${+s.toFixed(s < 10 ? 2 : 1)} s`;
+const secs = s => `${+s.toFixed(3)}`;
+
+/* ---------- parameters ---------- */
+const DIRS = { u: 'Upload', d: 'Download' }, KEYS = ['max', 'burst', 'thr', 'time', 'lim'];
+const PRESETS = [
+  ['MikroTik docs example', { u: ['2M', '4M', '1500k', '16s', '1M'], d: ['2M', '4M', '1500k', '16s', '1M'] }],
+  ['10 Mbps plan · 2× burst', { u: ['5M', '10M', '3750k', '16s', '2500k'], d: ['10M', '20M', '7500k', '16s', '5M'] }],
+  ['50/20 Mbps · +50% burst', { u: ['20M', '30M', '15M', '12s', '10M'], d: ['50M', '75M', '37500k', '12s', '25M'] }],
+  ['Hotspot 5 Mbps · snappy pages', { u: ['2M', '4M', '1600k', '8s', '1M'], d: ['5M', '10M', '4M', '8s', '2M'] }],
+];
+function readDir(d){
+  const v = k => $(`#${d}_${k}`).value, p = { max: parseRate(v('max')), burst: parseRate(v('burst')), thr: parseRate(v('thr')), time: parseTime(v('time')), lim: parseRate(v('lim')) };
+  for (const k of ['burst', 'thr', 'time', 'lim']) if (!$(`#${d}_${k}`).value.trim()) p[k] = 0;
+  p.bad = KEYS.filter(k => isNaN(p[k]));
+  p.on = !p.bad.length && p.burst > p.max && p.thr > 0 && p.time > 0;
+  return p;
+}
+function setDir(d, vals){ KEYS.forEach((k, i) => { if (vals[i] != null) $(`#${d}_${k}`).value = vals[i]; }); }
+
+/* ---------- analysis (per direction) ---------- */
+function analyze(p){
+  const msgs = [];
+  if (p.bad.length) { msgs.push(['bad', `Can't read ${p.bad.map(k => ({ max: 'max-limit', burst: 'burst-limit', thr: 'burst-threshold', time: 'burst-time', lim: 'limit-at' })[k]).join(', ')}.`]); return { msgs }; }
+  if (!(p.max > 0)) msgs.push(['bad', 'max-limit is required.']);
+  if (p.lim > p.max) msgs.push(['bad', `limit-at (${fmtRate(p.lim)}) is above max-limit — RouterOS caps it at max-limit.`]);
+  if (!p.burst && !p.thr && !p.time) msgs.push(['info', 'Burst is off — set burst-limit, burst-threshold and burst-time to enable it.']);
+  else if (!(p.burst > p.max)) msgs.push(['bad', `burst-limit must be higher than max-limit (${fmtRate(p.max)}), or burst does nothing.`]);
+  else if (!p.thr || !p.time) msgs.push(['bad', `burst needs both burst-threshold and burst-time.`]);
+  const r = { msgs, on: p.on };
+  if (!p.on) return r;
+  r.dt = p.time / 16;
+  r.formula = p.thr * p.time / p.burst;                                   // docs: longest-burst-time
+  r.never = p.thr >= p.burst;
+  r.steps = r.never ? Infinity : Math.ceil(16 * p.thr / p.burst - 1e-9);  // the average only moves in burst-time/16 steps
+  r.actual = r.steps * r.dt;
+  r.data = r.never ? Infinity : p.burst * r.actual;
+  r.extra = r.never ? Infinity : (p.burst - p.max) * r.actual;
+  r.rearm = p.max > p.thr ? Math.ceil(16 * (1 - p.thr / p.max) - 1e-9) * r.dt : 0;
+  if (r.never) msgs.push(['bad', `burst-threshold (${fmtRate(p.thr)}) is at or above burst-limit, so the average can never reach it: burst never ends and the queue really runs at ${fmtRate(p.burst)}.`]);
+  else if (p.thr > p.max) msgs.push(['warn', `burst-threshold (${fmtRate(p.thr)}) is above max-limit (${fmtRate(p.max)}): a client downloading non-stop keeps re-earning burst and averages about ${fmtRate(p.thr)} instead of ${fmtRate(p.max)}.`]);
+  if (p.lim && p.thr < p.lim) msgs.push(['info', `burst-threshold is below limit-at — unusual; the common order is limit-at ≤ burst-threshold ≤ max-limit < burst-limit.`]);
+  if (r.dt < 0.25) msgs.push(['info', `burst-time ${fmtS(p.time)} is very short — the average jumps every ${fmtS(r.dt)}, so bursts are only a blip.`]);
+  if (!msgs.length) msgs.push(['ok', `Order is sane: ${p.lim ? 'limit-at ≤ ' : ''}burst-threshold ≤ max-limit < burst-limit.`]);
+  return r;
+}
+
+/* ---------- simulation ---------- */
+// Slots of burst-time/16. At each slot start: average = traffic of the last 16 slots / burst-time;
+// burst allowed if average < burst-threshold; the slot then runs at burst-limit or max-limit (or less if there's no demand).
+function simulate(p, jobs, { cap = 0, duration = 0, burst = true } = {}){
+  const T = p.time > 0 ? p.time : 8, dt = T / 16, win = new Float64Array(16);
+  let wsum = 0, wi = 0, cum = 0;
+  const J = jobs.map(j => ({ ...j, s0: Math.ceil(j.start / dt - 1e-9), s1: j.dur != null ? Math.ceil((j.start + j.dur) / dt - 1e-9) : Infinity, left: j.size ?? Infinity, done: null, got: 0 }));
+  const limit = Math.min(Math.ceil((duration || 3600) / dt), 40000), rows = [];
+  const tail = Math.max(T, 4), lastStart = Math.max(0, ...J.map(j => j.start));
+  for (let k = 0; k < limit; k++) {
+    const t = k * dt, avg = wsum / T, allowed = burst && p.on && avg < p.thr - 1e-6;
+    let rate = allowed ? p.burst : p.max; if (cap > 0) rate = Math.min(rate, cap);
+    const budget = rate * dt; let sent = 0, active = false;
+    for (const j of J) {
+      if (k < j.s0 || j.done != null) continue;
+      if (k >= j.s1) { j.done = j.s1 * dt; continue; }
+      active = true;
+      const x = Math.min(j.left, budget - sent); if (x <= 0) continue;
+      sent += x; j.left -= x; j.got += x;
+      if (j.left <= 1e-6) j.done = t + sent / rate;
+    }
+    wsum += sent - win[wi]; win[wi] = sent; wi = (wi + 1) % 16; cum += sent;
+    rows.push({ t, avg, allowed, rate: sent / dt, cum, active, cap: rate });
+    if (!duration && t >= lastStart && J.every(j => j.done != null) && t + dt >= Math.max(...J.map(j => j.done)) + tail) break;
+  }
+  return { p, dt, T, rows, jobs: J, end: rows.length * dt, endAvg: wsum / T };
+}
+function scenarioJobs(key, p){
+  const MB = 8e6;
+  // the docs' 4 MB blocks take 16 s at their 2M max-limit; keep that proportion for any plan
+  if (key === 'docs') { const size = Math.max(p.max, 1e5) * 16; return { jobs: [{ start: 0, size, name: 'Download 1' }, { start: 17, size, name: 'Download 2' }] }; }
+  if (key === 'cont') return { jobs: [{ start: 0, name: 'Download' }], duration: Math.max(4 * (p.time || 8), 40) };
+  if (key === 'speed') return { jobs: [0, 40, 80].map((s, i) => ({ start: s, dur: 15, name: `Speed test ${i + 1}` })), duration: 110 };
+  if (key === 'web') { const size = Math.max(p.max, 1e5) * 1.5; return { jobs: Array.from({ length: 8 }, (_, i) => ({ start: i * 6, size, name: `Page ${i + 1}` })) }; }
+  return parseJobs($('#jobs').value);
+}
+function parseJobs(text){
+  const jobs = [], bad = [];
+  text.split('\n').forEach(line => {
+    const m = line.trim().match(/^(\d+(?:\.\d+)?)\s*s?[\s,;]+(\d+(?:\.\d+)?)\s*(GB|MB|KB|kB|Gb|Mb|Kb|kb|B|s)?$/);
+    if (!line.trim()) return;
+    if (!m) { bad.push(line.trim()); return; }
+    const n = +m[2], u = m[3] || 'MB';
+    if (u === 's') jobs.push({ start: +m[1], dur: n, name: `Saturate ${n}s` });
+    else jobs.push({ start: +m[1], size: n * { GB: 8e9, MB: 8e6, KB: 8e3, kB: 8e3, B: 8, Gb: 1e9, Mb: 1e6, Kb: 1e3, kb: 1e3 }[u], name: `${n} ${u}` });
+  });
+  jobs.forEach((j, i) => j.name = `#${i + 1} · ${j.name}`);
+  return { jobs, bad, duration: +$('#dur').value || 0, cap: parseRate($('#cap').value) || 0 };
+}
+const jobsText = jobs => jobs.map(j => `${secs(j.start)} ${j.dur != null ? j.dur + 's' : j.size == null ? '3600s' : +(j.size / 8e6).toFixed(3) + 'MB'}`).join('\n');
+
+/* ---------- state ---------- */
+let P = {}, A = {}, SIM = null, BASE = null, dir = 'd', tau = 0, playing = false, reveal = false, raf = 0, last = 0;
+function compute(){
+  P = { u: readDir('u'), d: readDir('d') }; A = { u: analyze(P.u), d: analyze(P.d) };
+  renderResults(); renderConfig();
+  const p = P[dir], key = $('#scen').value;
+  if (p.bad.length || !(p.max > 0)) { SIM = BASE = null; $('#c1').innerHTML = $('#c2').innerHTML = ''; $('#tiles').innerHTML = ''; $('#simSummary').innerHTML = `<div class="err">Fix the ${DIRS[dir].toLowerCase()} values above to run the simulation.</div>`; $('#simTable').innerHTML = ''; return; }
+  const sc = scenarioJobs(key, p), cap = key === 'custom' ? sc.cap : 0;
+  if (!sc.jobs.length) { SIM = BASE = null; $('#c1').innerHTML = $('#c2').innerHTML = ''; $('#simSummary').innerHTML = '<div class="err">Add at least one transfer, e.g. <span class="mono">0 4MB</span>.</div>'; return; }
+  BASE = simulate(p, sc.jobs, { cap, duration: sc.duration, burst: false });          // the no-burst run is the longest
+  SIM = simulate(p, sc.jobs, { cap, duration: sc.duration || BASE.end });
+  if (BASE.rows.length !== SIM.rows.length) BASE = simulate(p, sc.jobs, { cap, duration: SIM.end, burst: false });
+  $('#scrub').max = SIM.end; $('#scrub').step = SIM.dt;
+  tau = Math.min(tau, SIM.end);
+  draw(); summary(sc); table();
+  if (sc.bad?.length) $('#simSummary').insertAdjacentHTML('afterbegin', `<div class="err">Couldn't read: ${esc(sc.bad.slice(0, 4).join(' · '))}</div>`);
+}
+
+/* ---------- results cards ---------- */
+const badge = (c, t) => `<span class="b b-${c}">${esc(t)}</span>`;
+const LV = { ok: ['ok', 'OK'], info: ['info', 'Info'], warn: ['warn', 'Check'], bad: ['bad', 'Problem'] };
+function renderResults(){
+  $('#results').innerHTML = ['d', 'u'].map(d => {
+    const p = P[d], r = A[d];
+    const head = `<div class="t"><span>${DIRS[d]}</span>${r.on ? badge('ok', 'Burst on') : badge('mute', 'Burst off')}</div>`;
+    const msgs = `<ul class="msgs">${r.msgs.map(([l, t]) => `<li>${badge(...LV[l])}<span>${t}</span></li>`).join('')}</ul>`;
+    if (!r.on) return `<div class="card">${head}${p.max > 0 && !p.bad.length ? `<div class="big">${fmtRate(p.max)} <small>flat</small></div>` : ''}${msgs}</div>`;
+    const kv = rows => `<div class="kv">${rows.map(([k, v]) => `<div>${k}</div><div>${v}</div>`).join('')}</div>`;
+    return `<div class="card">${head}
+      <div class="big">${fmtRate(p.burst)} <small>for ${r.never ? 'ever' : fmtS(r.actual)}, then</small> ${fmtRate(p.max)}</div>
+      ${kv([
+        ['Longest burst', r.never ? 'never ends' : `${fmtS(r.actual)} <span class="muted">· docs formula threshold × burst-time ÷ burst-limit = ${fmtS(r.formula)}</span>`],
+        ['Burst allowance', r.never ? '—' : `${fmtData(r.data)} <span class="muted">· ${fmtData(r.extra)} more than at max-limit</span>`],
+        ['Average updated', `every ${fmtS(r.dt)} <span class="muted">(burst-time ÷ 16)</span>`],
+        ['Burst comes back', p.max > p.thr ? `after ${fmtS(r.rearm)} idle <span class="muted">following sustained use · a full-length burst needs ~${fmtS(p.time)} idle</span>` : '<span class="muted">immediately — the average never stays above the threshold</span>'],
+      ])}${msgs}</div>`;
+  }).join('');
+}
+
+/* ---------- charts ---------- */
+const niceStep = (max, n) => { const raw = max / n, e = 10 ** Math.floor(Math.log10(raw)), f = raw / e; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * e; };
+const tickRate = v => v === 0 ? '0' : v >= 1e9 ? `${+(v / 1e9).toFixed(2)}G` : v >= 1e6 ? `${+(v / 1e6).toFixed(2)}M` : `${+(v / 1e3).toFixed(0)}k`;
+let G = null;   // geometry of the last draw, for cursor + hover
+function draw(){
+  if (!SIM) return;
+  const el1 = $('#c1'), W = Math.max(320, el1.clientWidth || 800), narrow = W < 560, p = SIM.p, rows = SIM.rows, n = rows.length, dt = SIM.dt;
+  const M = { l: 50, r: narrow ? 64 : 118, t: 10, b: 26 }, iw = W - M.l - M.r, H1 = narrow ? 230 : 290, H2 = narrow ? 150 : 170;
+  const x = t => M.l + t / SIM.end * iw;
+  const top = Math.max(p.on ? p.burst : p.max, p.thr || 0, ...rows.map(r => r.rate)), ys = niceStep(top * 1.08, 5), ymax = Math.ceil(top * 1.08 / ys) * ys;
+  const y = v => M.t + (H1 - M.t - M.b) * (1 - v / ymax);
+  const xs = niceStep(SIM.end, narrow ? 5 : 10), xt = []; for (let t = 0; t <= SIM.end + 1e-9; t += xs) xt.push(t);
+  const grid = (h, yf, ticks, fmt) => ticks.map(v => `<line x1="${M.l}" x2="${M.l + iw}" y1="${yf(v)}" y2="${yf(v)}" style="stroke:var(--border)"/><text x="${M.l - 8}" y="${yf(v) + 4}" text-anchor="end">${fmt(v)}</text>`).join('')
+    + xt.map(t => `<text x="${x(t)}" y="${h - 8}" text-anchor="middle">${+t.toFixed(2)}s</text>`).join('');
+  // burst-allowed bands
+  let bands = '', b0 = null;
+  rows.forEach((r, i) => { if (r.allowed && b0 == null) b0 = r.t; if ((!r.allowed || i === n - 1) && b0 != null) { const e = r.allowed ? r.t + dt : r.t; bands += `<rect x="${x(b0)}" y="${M.t}" width="${Math.max(0, x(e) - x(b0))}" height="${H1 - M.t - M.b}" style="fill:color-mix(in srgb,var(--s1) 9%,transparent)"/>`; b0 = null; } });
+  // reference lines, labelled at the right edge (nudged apart if they'd collide)
+  const refs = [p.on && ['burst-limit', p.burst, 'var(--muted)', '6 4'], ['max-limit', p.max, 'var(--muted)', '6 4'], p.on && ['burst-threshold', p.thr, 'var(--s2)', '6 4'], p.lim > 0 && ['limit-at', p.lim, 'var(--muted)', '2 4']].filter(Boolean).sort((a, b) => b[1] - a[1]);
+  let prevY = -99; const refSvg = refs.map(([name, v, c, dash]) => { const ly = Math.max(y(v) + 4, prevY + 13); prevY = ly;
+    return `<line x1="${M.l}" x2="${M.l + iw}" y1="${y(v)}" y2="${y(v)}" style="stroke:${c};stroke-width:1.5;stroke-dasharray:${dash}"/><text class="ref" x="${M.l + iw + 6}" y="${ly}">${narrow ? ros(v) : `${name} ${ros(v)}`}</text>`; }).join('');
+  // actual speed: a step line + 10% wash; average: sampled at each slot start
+  let step = `M${x(0)},${y(rows[0].rate)}`; rows.forEach((r, i) => { step += `H${x(r.t + dt)}`; if (i < n - 1) step += `V${y(rows[i + 1].rate)}`; });
+  const area = `${step}V${y(0)}H${x(0)}Z`, avgPts = rows.map(r => `${x(r.t)},${y(r.avg)}`).join(' ') + ` ${x(SIM.end)},${y(SIM.endAvg)}`;
+  el1.innerHTML = `<svg viewBox="0 0 ${W} ${H1}" height="${H1}" role="img" aria-label="Simulated speed over time">${grid(H1, y, Array.from({ length: Math.round(ymax / ys) + 1 }, (_, i) => i * ys), tickRate)}
+    <clipPath id="clip1"><rect id="cr1" x="${M.l}" y="0" width="${iw}" height="${H1}"/></clipPath>${bands}${refSvg}
+    <g clip-path="url(#clip1)"><path d="${area}" style="fill:var(--s1);opacity:.1"/><path d="${step}" style="fill:none;stroke:var(--s1);stroke-width:2;stroke-linejoin:round"/><polyline points="${avgPts}" style="fill:none;stroke:var(--s2);stroke-width:2;stroke-linejoin:round;stroke-linecap:round"/></g>
+    <line id="cur1" y1="${M.t}" y2="${H1 - M.b}" style="stroke:var(--text);stroke-width:1"/><line id="hov1" y1="${M.t}" y2="${H1 - M.b}" style="stroke:var(--muted);stroke-width:1" visibility="hidden"/>
+    <rect id="hit1" x="${M.l}" y="0" width="${iw}" height="${H1}" fill="transparent"/></svg><div class="tip" id="tip" hidden></div>`;
+  // cumulative data: with burst vs max-limit only
+  const dmax0 = Math.max(SIM.rows[n - 1].cum, BASE.rows[BASE.rows.length - 1].cum, 1), dsS = niceStep(dmax0 / 8 * 1.08, 4) , dmax = Math.ceil(dmax0 / 8 * 1.08 / dsS) * dsS;   // bytes
+  const y2 = B => M.t + (H2 - M.t - M.b) * (1 - B / dmax), pts = R => `${x(0)},${y2(0)} ` + R.rows.map(r => `${x(r.t + dt)},${y2(r.cum / 8)}`).join(' ');
+  const fmtB = B => !B ? '0' : B >= 1e9 ? `${+(B / 1e9).toFixed(1)}GB` : B >= 1e6 ? `${+(B / 1e6).toFixed(1)}MB` : `${+(B / 1e3).toFixed(0)}kB`;
+  const marks = SIM.jobs.slice(0, 12).map((j, i) => { const bj = BASE.jobs[i]; return (j.size != null && j.done != null ? `<circle cx="${x(j.done)}" cy="${y2(cumAt(SIM, j.done) / 8)}" r="4" style="fill:var(--s1);stroke:var(--panel);stroke-width:2"/>` : '')
+    + (bj.size != null && bj.done != null ? `<circle cx="${x(bj.done)}" cy="${y2(cumAt(BASE, bj.done) / 8)}" r="4" style="fill:var(--muted);stroke:var(--panel);stroke-width:2"/>` : ''); }).join('');
+  $('#c2').innerHTML = `<svg viewBox="0 0 ${W} ${H2}" height="${H2}" role="img" aria-label="Data transferred, with and without burst">${grid(H2, y2, Array.from({ length: Math.round(dmax / dsS) + 1 }, (_, i) => i * dsS), fmtB)}
+    <clipPath id="clip2"><rect id="cr2" x="${M.l}" y="0" width="${iw}" height="${H2}"/></clipPath>
+    <g clip-path="url(#clip2)"><polyline points="${pts(BASE)}" style="fill:none;stroke:var(--muted);stroke-width:2;stroke-dasharray:6 4"/><polyline points="${pts(SIM)}" style="fill:none;stroke:var(--s1);stroke-width:2;stroke-linejoin:round"/>${marks}</g>
+    <line id="cur2" y1="${M.t}" y2="${H2 - M.b}" style="stroke:var(--text);stroke-width:1"/><line id="hov2" y1="${M.t}" y2="${H2 - M.b}" style="stroke:var(--muted);stroke-width:1" visibility="hidden"/>
+    <rect id="hit2" x="${M.l}" y="0" width="${iw}" height="${H2}" fill="transparent"/></svg>`;
+  G = { x, M, iw, W };
+  ['#hit1', '#hit2'].forEach(s => { const h = $(s); h.addEventListener('pointermove', hover); h.addEventListener('pointerleave', unhover); h.addEventListener('pointerdown', e => { pause(); seek(timeAt(e)); }); });
+  setCursor(tau);
+}
+const cumAt = (S, t) => { const k = Math.min(S.rows.length - 1, Math.max(0, Math.floor(t / S.dt + 1e-9))), r = S.rows[k]; return r.cum - r.rate * S.dt + r.rate * Math.max(0, t - r.t); };
+const rowAt = t => SIM.rows[Math.min(SIM.rows.length - 1, Math.max(0, Math.floor(t / SIM.dt + 1e-9)))];
+function timeAt(e){ const svg = e.currentTarget.ownerSVGElement, r = svg.getBoundingClientRect(), vx = (e.clientX - r.left) * G.W / r.width; return Math.min(SIM.end, Math.max(0, (vx - G.M.l) / G.iw * SIM.end)); }
+function hover(e){
+  const t = timeAt(e), r = rowAt(t), xx = G.x(r.t + SIM.dt / 2);
+  ['#hov1', '#hov2'].forEach(s => { const l = $(s); l.setAttribute('x1', xx); l.setAttribute('x2', xx); l.setAttribute('visibility', 'visible'); });
+  const tip = $('#tip'); tip.hidden = false;
+  tip.innerHTML = `<div class="muted">${fmtS(r.t)} – ${fmtS(r.t + SIM.dt)}</div>
+    <div class="r"><i style="border-color:var(--s1)"></i><b>${fmtRate(r.rate)}</b><span class="muted">actual</span></div>
+    <div class="r"><i style="border-color:var(--s2)"></i><b>${fmtRate(r.avg)}</b><span class="muted">average · threshold ${SIM.p.on ? fmtRate(SIM.p.thr) : '—'}</span></div>
+    <div class="r">${SIM.p.on ? (r.allowed ? badge('ok', 'Burst allowed') : badge('mute', 'Burst not allowed')) : badge('mute', 'No burst')}<span class="muted">${fmtData(r.cum)} so far</span></div>`;
+  const box = $('#c1').getBoundingClientRect(), px = xx * box.width / G.W, w = tip.offsetWidth;
+  tip.style.left = `${px + 14 + w > box.width ? px - w - 14 : px + 14}px`;
+}
+function unhover(){ ['#hov1', '#hov2'].forEach(s => $(s)?.setAttribute('visibility', 'hidden')); const t = $('#tip'); if (t) t.hidden = true; }
+
+/* ---------- playback ---------- */
+function setCursor(t){
+  if (!SIM || !G) return;
+  tau = t; const xx = G.x(t);
+  ['#cur1', '#cur2'].forEach(s => { const l = $(s); if (l) { l.setAttribute('x1', xx); l.setAttribute('x2', xx); } });
+  ['#cr1', '#cr2'].forEach(s => $(s)?.setAttribute('width', reveal ? Math.max(0, xx - G.M.l) : G.iw));
+  $('#scrub').value = t; $('#clock').textContent = fmtS(t);
+  tiles(t);
+}
+function tiles(t){
+  const p = SIM.p, done = t >= SIM.end - 1e-9, r = done ? null : rowAt(t), total = SIM.jobs.reduce((a, j) => a + (j.size ?? 0), 0), got = cumAt(SIM, t);
+  const avg = done ? SIM.endAvg : r.avg, rate = done ? 0 : r.rate, allowed = done ? p.on && SIM.endAvg < p.thr : r.allowed;
+  $('#tiles').innerHTML = `
+    <div class="tile"><div class="l">Speed now</div><div class="v">${fmtRate(rate)}</div><div class="s">${!done && r.active ? `cap ${fmtRate(r.cap)}` : 'no traffic'}</div></div>
+    <div class="tile"><div class="l">Average over the last ${fmtS(SIM.T)}</div><div class="v">${fmtRate(avg)}</div><div class="s">${p.on ? `${avg < p.thr ? 'below' : 'at or above'} threshold ${fmtRate(p.thr)}` : 'burst off'}</div></div>
+    <div class="tile"><div class="l">Burst</div><div class="v" style="font-size:18px;margin:6px 0 5px">${p.on ? (allowed ? badge('ok', '● Allowed') : badge('mute', '○ Not allowed')) : badge('mute', 'Off')}</div><div class="s">${p.on ? `limit now ${fmtRate(allowed ? p.burst : p.max)}` : `limit ${fmtRate(p.max)}`}</div></div>
+    <div class="tile"><div class="l">Transferred</div><div class="v">${fmtData(got)}</div><div class="s">${total ? `of ${fmtData(total)}` : 'open-ended transfer'}</div></div>`;
+}
+function tick(now){
+  const sp = +$('#speed').value; setCursor(Math.min(SIM.end, tau + (now - last) / 1000 * sp)); last = now;
+  if (tau >= SIM.end - 1e-9) { pause(); reveal = false; setCursor(SIM.end); } else raf = requestAnimationFrame(tick);
+}
+function play(){ if (!SIM) return; if (tau >= SIM.end - 1e-9) tau = 0; playing = reveal = true; last = performance.now(); $('#play').textContent = '⏸ Pause'; raf = requestAnimationFrame(tick); }
+function pause(){ playing = false; cancelAnimationFrame(raf); $('#play').textContent = '▶ Play'; }
+function seek(t){ reveal = false; setCursor(t); }
+$('#play').onclick = () => playing ? pause() : play();
+$('#scrub').addEventListener('input', e => { pause(); seek(+e.target.value); });
+
+/* ---------- summary + table ---------- */
+function summary(){
+  const p = SIM.p, rows = SIM.jobs.map((j, i) => {
+    const b = BASE.jobs[i];
+    if (j.size == null) {   // saturating transfer: how much burst it got
+      const sl = SIM.rows.filter(r => r.t >= j.start - 1e-9 && r.t < (j.done ?? SIM.end) - 1e-9), burstS = sl.filter(r => r.rate > p.max + 1e-6).length * SIM.dt;
+      const avg = sl.length ? sl.reduce((a, r) => a + r.rate, 0) / sl.length : 0;
+      return `<tr><td>${esc(j.name)}</td><td>${fmtS(j.start)}</td><td>${fmtData(j.got)}</td><td>avg <b>${fmtRate(avg)}</b></td><td>${fmtRate(p.max)}</td><td>${burstS ? `${fmtS(burstS)} at ${fmtRate(p.burst)}` : 'no burst'}</td></tr>`;
+    }
+    const tb = j.done != null ? j.done - j.start : null, tn = b.done != null ? b.done - b.start : null;
+    return `<tr><td>${esc(j.name)}</td><td>${fmtS(j.start)}</td><td>${fmtData(j.size)}</td><td><b>${fmtS(tb)}</b></td><td>${fmtS(tn)}</td><td>${tb != null && tn != null && tn - tb > 1e-6 ? `<b>${fmtS(tn - tb)} faster</b> <span class="muted">(${Math.round((1 - tb / tn) * 100)}%)</span>` : tb == null ? 'unfinished' : '<span class="muted">no gain — burst not available</span>'}</td></tr>`;
+  }).join('');
+  $('#simSummary').innerHTML = `<div class="tablewrap"><table><thead><tr><th>Transfer</th><th>Starts</th><th>Size</th><th>With burst</th><th>max-limit only</th><th>Difference</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+function table(){
+  const rows = SIM.rows.slice(0, 600), p = SIM.p;
+  $('#simTable').innerHTML = `<table><thead><tr><th>Time</th><th>average-rate</th><th>burst</th><th>actual-rate</th><th>transferred</th></tr></thead><tbody>${rows.map(r =>
+    `<tr><td class="mono">${fmtS(r.t)}</td><td class="mono">${fmtRate(r.avg)}</td><td>${!p.on ? '<span class="muted">off</span>' : r.allowed ? 'allowed' : '<span class="muted">not allowed</span>'}</td><td class="mono">${fmtRate(r.rate)}</td><td class="mono">${fmtData(r.cum)}</td></tr>`).join('')}</tbody></table>${SIM.rows.length > 600 ? `<p class="note">First 600 of ${SIM.rows.length} steps.</p>` : ''}`;
+}
+
+/* ---------- config ---------- */
+let CFG = [];
+function renderConfig(){
+  const U = P.u, D = P.d;
+  if (U.bad.length || D.bad.length || !(U.max > 0 && D.max > 0)) { CFG = []; $('#cfg').innerHTML = '<pre># Fix the values above first.</pre>'; $('#rlOut').textContent = '—'; $('#copyRl').disabled = true; return; }
+  const clean = s => String(s).replace(/["\\]/g, '').trim(), name = clean($('#qname').value) || 'client-1', target = clean($('#qtarget').value) || '192.168.88.10/32';
+  const on = U.on || D.on, lim = U.lim > 0 || D.lim > 0, pair = k => `${ros(U[k])}/${ros(D[k])}`, tpair = `${secs(U.time)}s/${secs(D.time)}s`;
+  const prof = clean($('#pname').value) || `plan-${ros(D.max)}-${ros(U.max)}`;
+  const simple = `/queue simple add name="${name}" target=${target} max-limit=${pair('max')}${on ? ` burst-limit=${pair('burst')} burst-threshold=${pair('thr')} burst-time=${tpair}` : ''}${lim ? ` limit-at=${pair('lim')}` : ''}`;
+  const rl = [pair('max'), ...(on || lim ? [on ? pair('burst') : '0/0', on ? pair('thr') : '0/0', on ? `${secs(U.time)}/${secs(D.time)}` : '0/0'] : []), ...(lim ? ['8', pair('lim')] : [])].join(' ');
+  const tree = d => { const q = P[d], suf = d === 'd' ? 'down' : 'up'; return `add name="${name}-${suf}" parent=global packet-mark=${name}-${suf} max-limit=${ros(q.max)}${q.on ? ` burst-limit=${ros(q.burst)} burst-threshold=${ros(q.thr)} burst-time=${secs(q.time)}s` : ''}${q.lim ? ` limit-at=${ros(q.lim)}` : ''}`; };
+  CFG = [['Simple queue', simple], ['PPP profile (PPPoE / L2TP / SSTP… clients)', `/ppp profile add name="${prof}" rate-limit="${rl}"`],
+    ['Hotspot user profile', `/ip hotspot user profile add name="${prof}" rate-limit="${rl}"`],
+    [`Queue tree (needs mangle rules that mark ${name}-down / ${name}-up)`, `/queue tree\n${tree('d')}\n${tree('u')}`]];
+  $('#cfg').innerHTML = CFG.map(([h, t], i) => `<div class="cfgblk"><div class="h"><span>${esc(h)}</span><button data-cp="${i}">Copy</button></div><pre>${esc(t)}</pre></div>`).join('');
+  $('#rlOut').textContent = rl; $('#copyRl').disabled = false;
+}
+$('#copyCfg').onclick = e => copyText(CFG.map(([h, t]) => `# ${h}\n${t}`).join('\n\n'), e.target);
+$('#cfg').onclick = e => { const b = e.target.closest('[data-cp]'); if (b) copyText(CFG[+b.dataset.cp][1], b); };
+$('#copyRl').onclick = () => copyText($('#rlOut').textContent, $('#copyRl'));
+$('#rlOut').onclick = () => !$('#copyRl').disabled && $('#copyRl').click();
+
+/* ---------- import, presets, solver ---------- */
+function importText(s){
+  s = s.trim(); const rl = s.match(/rate-limit="?([^"]+)"?/i); if (rl) s = rl[1].trim();
+  const split = v => { const [a, b] = String(v).split('/'); return [a, b ?? a]; };
+  if (/(max-limit|burst-limit)=/i.test(s)) {
+    const kv = {}; s.replace(/([\w-]+)=("[^"]*"|\S+)/g, (_, k, v) => { kv[k.toLowerCase()] = v.replace(/"/g, ''); });
+    const map = { 'max-limit': 'max', 'burst-limit': 'burst', 'burst-threshold': 'thr', 'burst-time': 'time', 'limit-at': 'lim' }; let n = 0;
+    for (const [k, key] of Object.entries(map)) if (kv[k] != null) { const [u, d] = split(kv[k]); $(`#u_${key}`).value = u; $(`#d_${key}`).value = d; n++; }
+    return n;
+  }
+  const t = s.split(/\s+/).filter(Boolean); if (!t.length || isNaN(parseRate(split(t[0])[0]))) return 0;
+  const order = ['max', 'burst', 'thr', 'time', null, 'lim'];   // rx/tx rate, burst rate, burst threshold, burst time, priority, rate-min
+  t.forEach((tok, i) => { const key = order[i]; if (!key) return; const [u, d] = split(tok); $(`#u_${key}`).value = key === 'time' && /^\d+(\.\d+)?$/.test(u) ? u + 's' : u; $(`#d_${key}`).value = key === 'time' && /^\d+(\.\d+)?$/.test(d) ? d + 's' : d; });
+  if (t.length < 6) for (const key of ['lim', ...(t.length < 4 ? ['time', 'thr', 'burst'].slice(0, 4 - t.length) : [])]) { $(`#u_${key}`).value = ''; $(`#d_${key}`).value = ''; }
+  return t.length;
+}
+$('#import').onclick = () => { const n = importText($('#paste').value); if (!n) { $('#paste').focus(); $('#paste').select(); return; } $('#paste').value = ''; touched(); };
+$('#paste').addEventListener('keydown', e => e.key === 'Enter' && $('#import').click());
+$('#presets').innerHTML = PRESETS.map(([n], i) => `<span class="chip" data-p="${i}">${esc(n)}</span>`).join('');
+$('#presets').onclick = e => { const c = e.target.closest('[data-p]'); if (!c) return; const v = PRESETS[+c.dataset.p][1]; setDir('u', v.u); setDir('d', v.d); touched(); };
+$('#solve').onclick = () => {
+  const want = +$('#want').value; if (!(want > 0)) return;
+  const notes = ['d', 'u'].map(d => { const p = readDir(d); if (!(p.burst > p.max && p.thr > 0)) return `${DIRS[d]}: set burst-limit and burst-threshold first`;
+    if (p.thr >= p.burst) return `${DIRS[d]}: impossible while burst-threshold ≥ burst-limit`;
+    const t = Math.max(1, Math.round(want * p.burst / p.thr)); $(`#${d}_time`).value = `${t}s`;
+    return `${DIRS[d]} ${t}s → ${fmtS(Math.ceil(16 * p.thr / p.burst - 1e-9) * t / 16)}`; });
+  $('#solveNote').textContent = notes.join(' · '); touched();
+};
+
+/* ---------- wiring ---------- */
+let deb;
+function touched(){ clearTimeout(deb); deb = setTimeout(() => { pause(); reveal = false; compute(); }, 200); }
+$('.bq').addEventListener('input', e => { if (e.target.matches('#scrub, #paste, #speed, #want')) return; touched(); });
+$('#scen').onchange = () => { const c = $('#scen').value === 'custom'; $('#customRow').hidden = !c;
+  if (c && !$('#jobs').value.trim()) $('#jobs').value = jobsText(scenarioJobs('docs', P[dir]).jobs); tau = 0; touched(); };
+$('#dir').onclick = e => { const b = e.target.closest('[data-d]'); if (!b) return; dir = b.dataset.d; $$('#dir button').forEach(x => x.classList.toggle('on', x === b)); tau = 0; touched(); };
+$$('#dir button').forEach(x => x.classList.toggle('on', x.dataset.d === dir));
+new ResizeObserver(() => { if (SIM) draw(); }).observe($('#c1'));
+if (window.NetopsHistory) window.NetopsHistory.labeler = () => { const d = readDir('d'), u = readDir('u'); return `↓ ${ros(d.max)}${d.on ? `→${ros(d.burst)}` : ''} · ↑ ${ros(u.max)}${u.on ? `→${ros(u.burst)}` : ''} · ${secs(d.time || 0)}s`; };
+if (getParam('q')) { importText(getParam('q')); }
+compute();
+document.addEventListener('DOMContentLoaded', () => { $('#customRow').hidden = $('#scen').value !== 'custom'; compute(); });   // after History restores saved inputs
+</script>

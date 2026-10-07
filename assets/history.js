@@ -1,7 +1,8 @@
 /* Recently used tools + per-tool input history for NetOps Toolkit pages.
    Everything lives in this browser's localStorage under "netops:" — nothing is sent anywhere.
    On tool pages: restores the last inputs, records each run (primary button / Enter), adds a History menu.
-   Opt out per field, container or button with data-nosave. Pages can keep extra state via NetopsHistory.state(). */
+   Opt out per field, container or button with data-nosave. Pages can keep extra state via NetopsHistory.state()
+   and name their history entries by setting NetopsHistory.labeler = root => 'label'. */
 (function(){
   const P = 'netops:', MAX_HIST = 12, MAX_ENTRY = 30000, MAX_FIELD = 100000;
   const get = (k, d) => { try { const v = localStorage.getItem(P + k); return v == null ? d : JSON.parse(v); } catch { return d; } };
@@ -70,7 +71,8 @@
   /* ---------- history: one entry per run ---------- */
   function record(root, how){
     if (!enabled()) return;
-    const f = changed(root), lb = label(f, root);
+    const f = changed(root), custom = window.NetopsHistory.labeler?.(root);   // a page may name its own entries
+    const lb = typeof custom === 'string' && custom.trim() ? { text: custom.trim().slice(0, 120), more: 0 } : label(f, root);
     if (!lb || !Object.keys(f).length || JSON.stringify(f).length > MAX_ENTRY) return;
     const tab = root !== document && root.id?.startsWith('pane-') ? root.id.slice(5) : null;
     const tabName = tab && document.querySelector(`#tabs .tab[data-t="${CSS.escape(tab)}"]`)?.firstChild?.textContent?.trim();
