@@ -1,0 +1,392 @@
+<!-- title: Traceroute Analyzer | desc: Paste tracert, traceroute or mtr output — identify who owns every hop (ASN, IXP, location, reverse DNS) and tell real latency or loss from ICMP rate-limiting. -->
+<style>
+.rbar{position:relative;width:130px;height:8px;border-radius:4px;background:var(--code-bg);margin-top:5px}
+.rbar i{position:absolute;top:0;bottom:0;border-radius:4px;background:color-mix(in srgb,var(--accent) 35%,transparent)}
+.rbar b{position:absolute;top:-2px;bottom:-2px;width:2px;margin-left:-1px;border-radius:1px;background:var(--accent)}
+.aspath{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;word-break:normal}
+.aschip{border:1px solid var(--border);border-radius:8px;padding:3px 9px;background:var(--panel)}
+ul.find{list-style:none;margin:0;padding:0;display:grid;gap:7px}
+ul.find li{display:flex;gap:8px;align-items:baseline}
+ul.find .b{min-width:62px;text-align:center}
+a.ip{word-break:normal;white-space:nowrap}
+tr.dim td{color:var(--muted)}
+td.hn{font-weight:600;font-variant-numeric:tabular-nums}
+td.nt{font-size:12px;min-width:180px}
+td.nt div+div{margin-top:3px}
+</style>
+<section class="panel">
+  <label class="small" for="in">Paste traceroute output — Windows tracert, Linux / macOS traceroute, mtr --report, tracepath, Cisco / Juniper, MikroTik, or just a list of IPs</label>
+  <textarea id="in" spellcheck="false" style="min-height:220px" placeholder="Tracing route to dns.google [8.8.8.8]&#10;over a maximum of 30 hops:&#10;&#10;  1     2 ms     2 ms     5 ms  192.168.100.1&#10;  2     3 ms     2 ms     3 ms  172.16.32.1&#10;  …"></textarea>
+  <div class="row">
+    <button class="primary" id="go">Identify hops</button>
+    <button id="sample">Load sample</button>
+    <button id="clear">Clear</button>
+    <span style="flex:1"></span>
+    <label class="chk"><input type="checkbox" id="optOnline" checked> Online lookups (ASN, IXP, location, PTR)</label>
+  </div>
+  <p class="note">Parsing and private / CGNAT checks run locally. With online lookups on, each public hop is queried straight from your browser: RIPEstat (BGP origin &amp; prefix), PeeringDB (IXP peering LANs), ipwho.is / ipapi.co (location) and Cloudflare DoH (reverse DNS).</p>
+</section>
+<div id="out"></div>
+
+<script>
+const SAMPLE = `traceroute to 8.8.8.8 (8.8.8.8), 30 hops max, 60 byte packets
+ 1  192.168.1.1  0.412 ms  0.388 ms  0.371 ms
+ 2  100.64.0.1  6.902 ms  6.877 ms  7.215 ms
+ 3  * * *
+ 4  10.20.30.1  9.104 ms  48.871 ms  9.332 ms
+ 5  184.105.65.13  10.215 ms  10.188 ms  10.402 ms
+ 6  72.14.218.190  11.023 ms  10.998 ms  11.214 ms
+ 7  108.170.252.193  11.873 ms 142.251.60.25  12.006 ms  11.940 ms
+ 8  8.8.8.8  11.502 ms  11.488 ms  11.611 ms`;
+const badge = (c, t, title = '') => `<span class="b b-${c}"${title ? ` title="${esc(title)}"` : ''}>${esc(t)}</span>`;
+const txt = h => { const d = document.createElement('div'); d.innerHTML = h; return d.textContent; };
+const getJ = (u, ms = 10000) => fetch(u, { signal: AbortSignal.timeout(ms) }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+async function pool(items, n, fn){ let i = 0; await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => { while (i < items.length) { const k = i++; try { await fn(items[k], k); } catch {} } })); }
+
+/* ---------- parsing ---------- */
+const HOP_RE = /^\s*(\d{1,3})(?:\?:|\?|\.\|--|\.|:)?(?=\s)/;   // "  1 ", " 1.|-- " (mtr), " 1: " / " 1?: " (tracepath)
+const HDR_RE = /(?:tracing (?:the )?route to|traceroute6?\s+to|tracepath6?\s+to)\s+([^\s,\[(]+)(?:\s*[\[(]([^\])]+)[\])])?/i;
+const SKIP_RE = /^\s*(?:over a maximum|trace complete|type escape|vrf info|start:|host:|resume:|columns:|#|computing statistics|source to here)/i;
+const FLAGS = { H: 'host unreachable', N: 'network unreachable', P: 'protocol unreachable', S: 'source route failed', F: 'fragmentation needed (MTU problem)', X: 'administratively prohibited (filtered)', A: 'administratively prohibited (filtered)', U: 'port unreachable', V: 'host precedence violation', C: 'precedence cutoff', Q: 'source quench' };
+const flagText = f => FLAGS[f[0]] || `ICMP unreachable, code ${f}`;
+const normIP = s => s.includes(':') && parseIPv6(s) != null ? fmtIPv6(parseIPv6(s)) : parseIPv4(s) != null ? fmtIPv4(parseIPv4(s)) : s;
+function findAddrs(s){
+  const out = [];
+  for (const m of s.matchAll(/(?<![\w.:])[0-9a-f]*:[0-9a-f:]*:[0-9a-f:.]*/gi)) {
+    const t = m[0].replace(/\.+$/, '');
+    if (t.length > 2 && parseIPv6(t) != null) out.push({ ip: normIP(t), idx: m.index, end: m.index + t.length });
+  }
+  for (const m of s.matchAll(/(?<![\w.-])(?:\d{1,3}\.){3}\d{1,3}(?!\d|\.\w|[\w-])/g))
+    if (parseIPv4(m[0]) != null && !out.some(a => m.index >= a.idx && m.index < a.end)) out.push({ ip: normIP(m[0]), idx: m.index });
+  return out.sort((a, b) => a.idx - b.idx);
+}
+function hostBefore(s, idx){   // "dns.google [8.8.8.8]" / "_gateway (192.168.1.1)"
+  const m = s.slice(0, idx).match(/(\w[\w.-]*)\s*[\[(]$/);
+  return m && /[a-z_]/i.test(m[1]) && !ipKind(m[1]) ? m[1].replace(/\.$/, '') : null;
+}
+const hostTok = x => !ipKind(x) && (/^_[\w.-]+$/.test(x) || /^[a-z0-9][\w-]*(?:\.[\w-]+)*\.[a-z][\w-]*\.?$/i.test(x));
+const newHop = n => ({ n, addrs: [], host: null, rtts: [], timeouts: 0, loss: null, sent: null, stats: null, flags: [], notes: [], mpls: [], asHint: null });
+function absorb(h, s, hopLine){
+  for (const a of findAddrs(s)) {
+    const host = hostBefore(s, a.idx), ex = h.addrs.find(x => x.ip === a.ip);
+    if (ex) ex.host ||= host; else h.addrs.push({ ip: a.ip, host });
+  }
+  if (hopLine) {
+    // mtr / MikroTik: Loss% Sent Last Avg Best Worst StDev
+    const st = s.match(/(\d+(?:\.\d+)?%|100\.0)\s+(\d+)((?:\s+\d+(?:\.\d+)?(?:ms)?){5})/), l = st || s.match(/(\d+(?:\.\d+)?)%/);
+    if (l) h.loss = parseFloat(l[1]);
+    if (st) { h.sent = +st[2]; if (h.loss < 100) { const [last, avg, best, worst, sd] = st[3].trim().split(/\s+/).map(parseFloat); h.stats = { last, avg, best, worst, sd }; } }
+    if (!h.addrs.length && !h.host) h.host = s.replace(/[|`]--/g, ' ').trim().split(/\s+/).find(hostTok) || null;
+  }
+  if (!h.stats) for (const m of s.matchAll(/(?:(<)\s?|(?<![\w.]))(\d+(?:\.\d+)?)\s?(?:ms|msec)\b/gi)) h.rtts.push(+m[2]);
+  h.timeouts += (s.match(/(?:^|\s)\*(?=\s|$)/g) || []).length;
+  for (const m of s.matchAll(/(?:^|\s)!([A-Z]|\d+|F-?\d*)(?=\s|$)/g)) if (!h.flags.includes(m[1])) h.flags.push(m[1]);
+  const w = s.match(/destination (?:host|net|network|protocol|port) unreachable|transmit error|general failure/i);
+  if (w && !h.notes.includes(w[0])) h.notes.push(w[0]);
+  for (const m of s.matchAll(/MPLS:?\s*Labels?[=\s]+(\d+(?:\/\d+)*)|MPLS:L=(\d+)/gi)) if (!h.mpls.includes(m[1] || m[2])) h.mpls.push(m[1] || m[2]);
+  const as = s.match(/\[AS\s?(\d+)[\]\/]|(?<![\w.])AS(\d+)\b/); if (as && !h.asHint) h.asHint = +(as[1] || as[2]);
+}
+function parse(text){
+  const lines = text.replace(/\r/g, '').split('\n'), hops = new Map();
+  let dest = null, cur = null;
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const hd = line.match(HDR_RE);
+    if (hd && !HOP_RE.test(line)) { const ip = [hd[2], hd[1]].find(x => x && ipKind(x)); dest = { name: hd[1], ip: ip ? normIP(ip) : null }; continue; }
+    if (SKIP_RE.test(line)) continue;
+    const m = line.match(HOP_RE);
+    if (m) {
+      const n = +m[1];
+      if (n === 0) { cur = null; continue; }   // pathping lists the source as hop 0
+      cur = hops.get(n) || newHop(n); hops.set(n, cur);
+      absorb(cur, line.slice(m[0].length), true);
+    } else if (cur) absorb(cur, line, false);   // ECMP / MPLS continuation lines
+  }
+  let fallback = false;
+  if (!hops.size) {   // no hop numbers: a bare IP list or PowerShell Test-NetConnection -TraceRoute
+    for (const line of lines) {
+      if (HDR_RE.test(line) || (/^\s*[A-Za-z][\w ()]*\s:\s/.test(line) && !/^\s*TraceRoute\s*:/i.test(line))) continue;
+      for (const a of findAddrs(line)) { const h = newHop(hops.size + 1); h.addrs.push({ ip: a.ip, host: hostBefore(line, a.idx) }); hops.set(h.n, h); }
+    }
+    fallback = hops.size > 0;
+  }
+  return { dest, hops: [...hops.values()].sort((a, b) => a.n - b.n), fallback };
+}
+function rttOf(h){
+  if (h.stats) return { min: h.stats.best, avg: h.stats.avg, max: h.stats.worst };
+  if (!h.rtts.length) return null;
+  return { min: Math.min(...h.rtts), avg: h.rtts.reduce((a, b) => a + b, 0) / h.rtts.length, max: Math.max(...h.rtts) };
+}
+const lossOf = h => h.loss != null ? h.loss : h.timeouts + h.rtts.length ? 100 * h.timeouts / (h.timeouts + h.rtts.length) : null;
+function classify(ip){
+  const label = ipKind(ip) === 4 ? v4Special(parseIPv4(ip)) : v6Special(parseIPv6(ip));
+  if (!label || /^(Global unicast|6to4|Teredo)$/.test(label)) return { kind: 'public', label: label === 'Global unicast' ? '' : label || '' };
+  if (/CGNAT/.test(label)) return { kind: 'cgnat', label };
+  if (/Private|Unique local/.test(label)) return { kind: 'private', label };
+  return { kind: 'special', label };
+}
+const TYPE = { public: ['info', 'Public'], private: ['mute', 'Private'], cgnat: ['warn', 'CGNAT'] };
+const typeBadge = ip => { const c = classify(ip), [cl, t] = TYPE[c.kind] || ['warn', c.label]; return badge(cl, t, c.label); };
+
+/* ---------- lookups ---------- */
+const flagOf = cc => /^[A-Z]{2}$/i.test(cc || '') ? String.fromCodePoint(...[...cc.toUpperCase()].map(c => 0x1f1a5 + c.charCodeAt(0))) : '';
+async function geo(ip){
+  try {
+    const j = await getJ('https://ipwho.is/' + ip);
+    if (j.success === false) throw new Error(j.message);
+    return { country: j.country, cc: j.country_code, city: j.city, lat: j.latitude, lon: j.longitude, asn: j.connection?.asn, org: j.connection?.org || j.connection?.isp };
+  } catch {
+    const j = await getJ(`https://ipapi.co/${ip}/json/`);
+    if (j.error) throw new Error(j.reason);
+    return { country: j.country_name, cc: j.country_code, city: j.city, lat: j.latitude, lon: j.longitude, asn: +String(j.asn || '').replace(/^AS/, '') || null, org: j.org };
+  }
+}
+const AS_NAMES = new Map();
+const asName = n => { if (!AS_NAMES.has(n)) AS_NAMES.set(n, getJ(`https://stat.ripe.net/data/as-overview/data.json?resource=AS${n}&sourceapp=netops-toolkit`).then(j => j.data?.holder || '', () => '')); return AS_NAMES.get(n); };
+const INFO = new Map();   // ip -> Promise<{ po, geo, ptr, ix }>, kept across runs
+function lookupIP(ip){
+  if (!INFO.has(ip)) INFO.set(ip, (async () => {
+    const [po, g, ptr, ix] = await Promise.allSettled([
+      getJ(`https://stat.ripe.net/data/prefix-overview/data.json?resource=${encodeURIComponent(ip)}&sourceapp=netops-toolkit`, 12000).then(j => j.data),
+      geo(ip),
+      doh(ptrName(ip), 'PTR').then(j => (j.Answer || []).filter(a => a.type === 12).map(a => a.data.replace(/\.$/, ''))[0] || null),
+      getJ(`https://www.peeringdb.com/api/netixlan?${ipKind(ip) === 4 ? 'ipaddr4' : 'ipaddr6'}=${encodeURIComponent(ip)}`).then(j => j.data?.[0] || null),
+    ]);
+    const v = r => r.status === 'fulfilled' ? r.value : null;
+    const info = { po: v(po), geo: v(g), ptr: v(ptr), ix: v(ix) };
+    if (info.ix) info.ix.holder = await asName(info.ix.asn);
+    if (!info.po && !info.geo) INFO.delete(ip);   // retry next run if everything failed
+    return info;
+  })());
+  return INFO.get(ip);
+}
+async function resolveHost(name){
+  for (const [t, code] of [['A', 1], ['AAAA', 28]]) { try { const a = ((await doh(name, t)).Answer || []).find(x => x.type === code); if (a) return normIP(a.data); } catch {} }
+  return null;
+}
+function owner(ip){
+  const i = S.info.get(ip); if (!i) return null;
+  if (i.ix) return { asn: i.ix.asn, name: i.ix.holder, ix: i.ix.name };
+  const o = i.po?.asns?.[0];
+  if (o) return { asn: o.asn, name: o.holder, prefix: i.po.resource };
+  if (i.geo?.asn) return { asn: +i.geo.asn, name: i.geo.org, via: 'geo' };
+  return null;
+}
+
+/* ---------- analysis ---------- */
+const fmtMs = x => x == null || isNaN(x) ? '—' : x < 10 ? String(+x.toFixed(1)) : String(Math.round(x));
+const shortName = s => String(s || '').includes(' - ') ? s.split(' - ').slice(1).join(' - ') : String(s || '');
+const asLabel = o => `<a class="mono" href="../bgp-toolkit/?q=AS${o.asn}">AS${o.asn}</a>${o.name ? ` <span title="${esc(o.name)}">${esc(shortName(o.name))}</span>` : ''}`;
+const prim = h => h.addrs[0]?.ip || null;
+const pubIP = h => h.addrs.find(a => classify(a.ip).kind === 'public')?.ip || null;
+const kindOf = h => prim(h) ? classify(prim(h)).kind : null;
+const hav = (a, b) => { const r = Math.PI / 180, x = Math.sin((b.lat - a.lat) * r / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin((b.lon - a.lon) * r / 2) ** 2; return 12742 * Math.asin(Math.sqrt(x)); };
+const LV = { ok: ['ok', 'OK'], info: ['info', 'Info'], warn: ['warn', 'Check'], bad: ['bad', 'Problem'] };
+
+function analyze(){
+  const { hops, dest } = S, idx = hops.map((h, i) => i);
+  const R = hops.map(rttOf), L = hops.map(lossOf);
+  const own = hops.map(h => pubIP(h) && owner(pubIP(h))), G = hops.map(h => pubIP(h) && S.info.get(pubIP(h))?.geo || null);
+  const firstPub = hops.findIndex(pubIP), silent = hops.map((h, i) => !h.addrs.length && !h.host && !R[i]);
+  const resp = idx.filter(i => R[i]), lastResp = resp.at(-1);
+  const notes = hops.map(() => []), ctx = hops.map(() => null), D = hops.map(() => null), F = [];
+  const list = a => a.map(i => hops[i].n).join(', '), hopsTxt = a => (a.length > 1 ? 'Hops ' : 'Hop ') + list(a);
+  const destIP = dest?.ip || null, reached = destIP ? hops.findIndex(h => h.addrs.some(a => a.ip === destIP)) : -1;
+
+  // networks crossed
+  const path = [];
+  own.forEach((o, i) => {
+    if (!o?.asn) return;
+    const last = path.at(-1);
+    if (last?.asn === o.asn) { last.to = hops[i].n; return; }
+    if (last) notes[i].push(`Enters ${asLabel(o)}`);
+    path.push({ ...o, from: hops[i].n, to: hops[i].n });
+  });
+
+  // per-hop roles
+  hops.forEach((h, i) => {
+    const k = kindOf(h);
+    if (i === 0 && (k === 'private' || k === 'special' || (!k && h.host))) notes[i].push('Your gateway / LAN router');
+    if (k === 'private' || k === 'cgnat') {
+      if (firstPub < 0 || i < firstPub) { if (i > 0 || k === 'cgnat') ctx[i] = k === 'cgnat' ? 'ISP access network (CGNAT space)' : 'Private network before the internet'; }
+      else {
+        const p = own.slice(0, i).findLast(Boolean), nx = own.slice(i + 1).find(Boolean);
+        ctx[i] = p && nx ? (p.asn === nx.asn ? `inside ${asLabel(p)}` : `between ${asLabel(p)} and ${asLabel(nx)}`) : p ? `after ${asLabel(p)}` : 'internal infrastructure';
+      }
+    }
+    if (i === firstPub) notes[i].push('First public address — where you reach the internet (usually your ISP)');
+    if (i === reached) notes[i].push('<b>Destination</b>');
+    if (silent[i]) notes[i].push('No reply — router filters or rate-limits probes');
+    if (h.addrs.some(a => a.resolved)) notes[i].push('Address resolved from the hostname in the trace');
+    if (own[i]?.ix) notes[i].push(`IXP peering LAN: <b>${esc(own[i].ix)}</b>`);
+    if (own[i]?.via === 'geo') notes[i].push('Prefix not seen in BGP — owner from geolocation DB');
+    if (h.mpls.length) notes[i].push(`MPLS label ${esc(h.mpls.join(', '))}`);
+    h.flags.forEach(f => notes[i].push(`<span class="mono">!${esc(f)}</span> ${esc(flagText(f))}`));
+    h.notes.forEach(x => notes[i].push(esc(x)));
+  });
+
+  // latency: spikes that later hops don't inherit are the router's own ICMP handling, not path delay
+  const deprio = [], steps = [];
+  resp.forEach((i, k) => {
+    const r = R[i], later = resp.slice(k + 1).map(j => R[j]);
+    if (k > 0) D[i] = r.min - R[resp[k - 1]].min;
+    if (later.length) {
+      const laterMax = Math.min(...later.map(x => x.max)), laterMin = Math.min(...later.map(x => x.min));
+      if ((r.max - r.min >= Math.max(25, r.min) && laterMax < r.max - Math.max(15, r.max * .3)) || r.min - laterMin >= Math.max(20, laterMin)) {
+        deprio.push(i); notes[i].push('RTT spike not carried to later hops — ICMP deprioritised, not real delay');
+      }
+    }
+    if (k > 0) {
+      const pi = resp[k - 1], step = r.min - R[pi].min;
+      if (step >= Math.max(15, R[pi].min * .5) && later.every(x => x.min >= r.min - Math.max(5, step * .25))) {
+        steps.push({ i, pi, step }); notes[i].push(`+${fmtMs(step)} ms added here and kept to the end`);
+      }
+    }
+  });
+
+  // loss: only loss that continues to the last hop is real
+  const lossNC = resp.filter(i => L[i] > 0 && resp.some(j => j > i && L[j] === 0));
+  let lossStart = null;
+  if (lastResp != null && L[lastResp] > 0) for (let k = resp.length - 1; k >= 0 && L[resp[k]] > 0; k--) lossStart = resp[k];
+  lossNC.forEach(i => notes[i].push('Loss here only — ICMP rate-limiting'));
+  if (lossStart != null) notes[lossStart].push('Loss starts here and continues to the last hop');
+  const silentMid = idx.filter(i => silent[i] && lastResp != null && i < lastResp), silentTail = idx.filter(i => silent[i] && (lastResp == null || i > lastResp));
+
+  // geolocation sanity: two hops can't be further apart than their RTTs allow (≈100 km per ms of round trip)
+  const gi = idx.filter(i => G[i]?.lat != null && R[i]), badGeo = new Set();
+  const conflict = (a, b) => hav(G[a], G[b]) > (R[a].min + R[b].min) * 100 + 300;
+  for (;;) {
+    let worst = -1, wc = 0;
+    for (const a of gi) { if (badGeo.has(a)) continue; const c = gi.filter(b => b !== a && !badGeo.has(b) && conflict(a, b)).length; if (c && c >= wc) { wc = c; worst = a; } }
+    if (worst < 0) break; badGeo.add(worst);
+  }
+  const countries = [];
+  gi.filter(i => !badGeo.has(i) && G[i].cc).forEach(i => { if (countries.at(-1)?.cc !== G[i].cc) countries.push(G[i]); });
+
+  // findings
+  if (reached >= 0) F.push(['ok', `Reached <span class="mono">${esc(dest.name)}</span> in ${hops[reached].n} hops${R[reached] ? ` — ${fmtMs(R[reached].min)} ms best, ${fmtMs(R[reached].avg)} ms average round trip` : ''}.`]);
+  else if (destIP) F.push(['bad', `Destination <span class="mono">${esc(destIP)}</span> not reached${lastResp != null ? ` — the last reply came from hop ${hops[lastResp].n}` : ''}.`]);
+  const pre = idx.filter(i => (firstPub < 0 || i < firstPub) && ['private', 'cgnat'].includes(kindOf(hops[i])));
+  if (pre.length > 1) F.push(['info', `${hopsTxt(pre)} are private before the first public address. Hop ${hops[pre[0]].n} is usually your own router; the rest are an upstream router (double NAT, if it's yours) or your ISP's private access network.`]);
+  const cg = idx.filter(i => kindOf(hops[i]) === 'cgnat'), cgPre = cg.filter(i => firstPub < 0 || i < firstPub), cgPost = cg.filter(i => !cgPre.includes(i));
+  if (cgPre.length) F.push(['warn', `${hopsTxt(cgPre)} in 100.64.0.0/10 (CGNAT shared space) before any public address — you're probably behind carrier-grade NAT. If your router's WAN IP is 100.64.x – 100.127.x, port forwarding and inbound connections won't work without a public IP from the ISP.`]);
+  if (cgPost.length) F.push(['info', `${hopsTxt(cgPost)} use${cgPost.length > 1 ? '' : 's'} 100.64.0.0/10 (CGNAT shared space) mid-path — the operator numbers internal links from it. Not routable on the internet, so the owner is inferred from neighbouring hops.`]);
+  const privMid = idx.filter(i => firstPub >= 0 && i > firstPub && kindOf(hops[i]) === 'private');
+  if (privMid.length) F.push(['info', `${hopsTxt(privMid)} use${privMid.length > 1 ? '' : 's'} RFC 1918 private addresses after the path is already on the internet — networks often number internal or interconnect links privately. They can't be looked up; the owner shown is inferred from neighbouring hops.`]);
+  idx.filter(i => own[i]?.ix).forEach(i => F.push(['info', `Hop ${hops[i].n} is on the <b>${esc(own[i].ix)}</b> peering LAN — traffic crosses an internet exchange there. The answering router belongs to ${asLabel(own[i])} (PeeringDB).`]));
+  if (deprio.length) F.push(['ok', `${hopsTxt(deprio)}: RTT spikes that later hops don't inherit. Those routers deprioritise or rate-limit their own ICMP replies — traffic passing <i>through</i> them isn't delayed. Not a real problem.`]);
+  steps.forEach(({ i, pi, step }) => {
+    const a = G[pi], b = G[i], geoTxt = a?.cc && b?.cc && a.cc !== b.cc && !badGeo.has(i) && !badGeo.has(pi) ? ` (${esc(a.country || a.cc)} → ${esc(b.country || b.cc)})` : '';
+    F.push([step >= 50 ? 'warn' : 'info', `Latency rises +${fmtMs(step)} ms between hop ${hops[pi].n} and hop ${hops[i].n}${geoTxt} and stays up to the end — that's where the delay is added: distance (a long-haul or submarine link) if it's constant, congestion if it changes with time of day.`]);
+  });
+  if (lossNC.length) F.push(['ok', `${hopsTxt(lossNC)}: packet loss that doesn't continue to later hops — ICMP rate-limiting on that router, not real loss.`]);
+  if (lossStart != null) F.push(['bad', `Loss starts at hop ${hops[lossStart].n} and continues to the last hop (${fmtMs(L[lastResp])}% there) — real packet loss likely begins on the link into hop ${hops[lossStart].n}. With only a few probes per hop, confirm with a longer mtr run.`]);
+  if (silentMid.length) F.push(['ok', `${hopsTxt(silentMid)} didn't answer (* * *) but later hops did — the router just doesn't reply to traceroute probes. Traffic still passes.`]);
+  if (silentTail.length && reached < 0) F.push(['warn', `No replies after hop ${lastResp != null ? hops[lastResp].n : '—'}. Either the destination (or a firewall in front of it) drops traceroute probes — try a TCP traceroute to an open port, e.g. <span class="mono">traceroute -T -p 443</span> — or the path breaks there.`]);
+  const mp = idx.filter(i => hops[i].mpls.length);
+  if (mp.length) F.push(['info', `MPLS labels at ${hopsTxt(mp).toLowerCase()} — hops inside an MPLS tunnel often all report the RTT of the tunnel exit, so latency can look flat and then jump.`]);
+  hops.forEach(h => { h.flags.forEach(f => F.push(['bad', `Hop ${h.n} returned <span class="mono">!${esc(f)}</span> — ${esc(flagText(f))}.`])); h.notes.forEach(x => F.push(['bad', `Hop ${h.n}: ${esc(x)}.`])); });
+  if (badGeo.size) F.push(['info', `The location${badGeo.size > 1 ? 's' : ''} shown for ${hopsTxt([...badGeo].sort((a, b) => a - b)).toLowerCase()} ${badGeo.size > 1 ? 'are' : 'is'} physically impossible for their RTT (light in fibre covers ≈100 km per ms of round trip) — the geo database likely shows the owner's registered address, or it's an anycast IP. Treat those locations as unknown.`]);
+  if (path.length > 1) F.push(['info', `The path crosses ${path.length} networks. At each handoff the next network's first router often answers from the previous network's link subnet, so the real boundary can be one hop off from where the ASN changes.`]);
+  const failed = S.online && !S.pending && hops.some(h => pubIP(h)) && !hops.some(h => S.info.get(pubIP(h))?.po || S.info.get(pubIP(h))?.geo);
+  if (failed) F.push(['warn', 'Online lookups failed — RIPEstat and ipwho.is may be blocked by this network or a browser extension.']);
+  if (S.fallback) F.push(['info', 'No hop numbers found — each address was treated as one hop, in order.']);
+  return { R, L, D, own, G, ctx, notes, F, path, countries, badGeo, reached, steps, resp, lastResp };
+}
+
+/* ---------- render ---------- */
+let S = null, runId = 0, raf = 0;
+const schedule = () => { raf ||= requestAnimationFrame(() => { raf = 0; render(); }); };
+function render(){
+  const A = S.A = analyze(), { hops, dest } = S;
+  const maxR = Math.max(1, ...A.R.filter(Boolean).map(r => r.max));
+  const pct = v => (Math.max(0, Math.min(v, maxR)) / maxR * 100).toFixed(1) + '%';
+  const last = A.lastResp != null ? A.R[A.lastResp] : null;
+  const loading = h => S.pending > 0 && h.addrs.some(a => classify(a.ip).kind === 'public' && !S.info.has(a.ip));
+  const destTxt = dest ? `${esc(dest.name)}${dest.ip && dest.ip !== dest.name ? ` <span class="muted">[${esc(dest.ip)}]</span>` : ''} ${A.reached >= 0 ? badge('ok', 'Reached') : dest.ip ? badge('bad', 'Not reached') : ''}` : '<span class="muted">not stated in the output</span>';
+  const pathTxt = A.path.length ? `<div class="aspath">${A.path.map(p => `<span class="aschip">${asLabel(p)} <span class="muted">· hop${p.from === p.to ? ' ' + p.from : `s ${p.from}–${p.to}`}</span>${p.ix ? ' ' + badge('info', 'IXP') : ''}</span>`).join('<span class="muted">→</span>')}</div>`
+    : S.pending ? '<span class="spin"></span>' : `<span class="muted">${S.online ? 'no public hops identified' : 'online lookups are off'}</span>`;
+  const rows = hops.map((h, i) => {
+    const r = A.R[i], l = A.L[i], o = A.own[i], g = A.G[i], ld = loading(h);
+    const addr = h.addrs.length ? h.addrs.map(a => { const host = a.host || S.info.get(a.ip)?.ptr;
+      return `<div><a class="mono ip" href="../domain-intel/?q=${encodeURIComponent(a.ip)}">${esc(a.ip)}</a>${host ? `<div class="muted mono" style="font-size:12px"${a.host ? '' : ' title="Reverse DNS (PTR)"'}>${esc(host)}</div>` : ''}</div>`; }).join('')
+      : h.host ? `<span class="mono">${esc(h.host)}</span>` : '<span class="muted">* * *</span>';
+    const type = h.addrs.length ? [...new Set(h.addrs.map(a => typeBadge(a.ip)))].join(' ') : '';
+    const net = o ? `${asLabel(o)}${o.prefix ? `<div class="muted mono" style="font-size:12px">${esc(o.prefix)}</div>` : ''}${o.ix ? ` ${badge('info', 'IXP')}` : ''}`
+      : ld ? '<span class="spin"></span>' : A.ctx[i] ? `<span class="muted">${A.ctx[i]}</span>` : h.asHint ? `AS${h.asHint} <span class="muted">(from trace)</span>` : '<span class="muted">—</span>';
+    const loc = g ? `${esc([g.city, g.cc].filter(Boolean).join(', '))}${A.badGeo.has(i) ? ' ' + badge('warn', 'Implausible', 'Too far away for this RTT — likely the registered address or an anycast IP') : ''}`
+      : ld ? '<span class="spin"></span>' : '<span class="muted">—</span>';
+    const rtt = (r ? `<span class="mono">${fmtMs(r.min)} / ${fmtMs(r.avg)} / ${fmtMs(r.max)}</span><div class="rbar" title="best ${fmtMs(r.min)} · avg ${fmtMs(r.avg)} · worst ${fmtMs(r.max)} ms"><i style="left:${pct(r.min)};width:max(4px, ${pct(r.max - r.min)})"></i><b style="left:${pct(r.avg)}"></b></div>` : '<span class="muted">—</span>')
+      + (l > 0 ? `<div style="margin-top:4px">${badge(l >= 100 ? 'bad' : 'warn', fmtMs(l) + '% loss')}</div>` : '');
+    const d = A.D[i], dTxt = d == null ? '' : `${d >= 0 ? '+' : '−'}${fmtMs(Math.abs(d))}`;
+    return `<tr class="${!h.addrs.length && !h.host && !r ? 'dim' : ''}"><td class="hn">${h.n}</td><td>${addr}</td><td>${type}</td><td>${net}</td><td>${loc}</td><td style="white-space:nowrap">${rtt}</td>
+      <td class="mono" style="white-space:nowrap">${A.steps.some(s => s.i === i) ? `<b>${dTxt}</b>` : dTxt}</td><td class="nt">${A.notes[i].map(x => `<div>${x}</div>`).join('')}</td></tr>`;
+  }).join('');
+  $('#out').innerHTML = `<section class="panel">
+    <div class="row" style="margin-top:0"><h2 style="margin:0">Summary</h2>${S.pending ? `<span class="muted"><span class="spin"></span> Looking up ${S.pending} public address${S.pending > 1 ? 'es' : ''}…</span>` : ''}
+      <span style="flex:1"></span><button id="copy">Copy report</button><button id="csv">CSV</button></div>
+    <div class="kv" style="margin-top:12px">
+      <div>Destination</div><div>${destTxt}</div>
+      <div>Hops</div><div>${hops.length} <span class="muted">(${A.resp.length} replied)</span></div>
+      <div>Round trip</div><div>${last ? `${fmtMs(last.min)} / ${fmtMs(last.avg)} / ${fmtMs(last.max)} ms <span class="muted">best / avg / worst at hop ${hops[A.lastResp].n}</span>` : '—'}</div>
+      <div>Networks</div><div>${pathTxt}</div>
+      ${A.countries.length ? `<div>Countries</div><div style="font-family:inherit">${A.countries.map(g => `${flagOf(g.cc)} ${esc(g.country || g.cc)}`).join(' <span class="muted">→</span> ')}</div>` : ''}
+    </div>
+    ${A.F.length ? `<h3 style="margin-top:16px">Findings</h3><ul class="find">${A.F.map(([lv, h]) => `<li>${badge(...LV[lv])}<span>${h}</span></li>`).join('')}</ul>` : ''}
+  </section>
+  <section class="panel"><div class="tablewrap"><table>
+    <thead><tr><th>#</th><th>Address</th><th>Type</th><th>Network</th><th>Location</th><th>RTT best / avg / worst (ms)</th><th>Δ best</th><th>Notes</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>
+    <p class="note">Locations are approximate — router IPs are often geolocated to the owner's registered address. The bar spans best → worst RTT on a shared scale; the tick marks the average.</p>
+  </section>`;
+  $('#copy').onclick = e => copyText(report(), e.target);
+  $('#csv').onclick = () => download('traceroute-hops.csv', toCSV(exportRows()), 'text/csv');
+}
+
+function exportRows(){
+  const A = S.A;
+  return [['hop', 'addresses', 'hostnames', 'type', 'asn', 'as_name', 'prefix', 'ixp', 'country', 'city', 'rtt_best_ms', 'rtt_avg_ms', 'rtt_worst_ms', 'loss_pct', 'notes'],
+    ...S.hops.map((h, i) => { const r = A.R[i], o = A.own[i], g = A.G[i], ip = prim(h);
+      return [h.n, h.addrs.map(a => a.ip).join(' '), h.addrs.map(a => a.host || S.info.get(a.ip)?.ptr).filter(Boolean).join(' ') || h.host || '',
+        ip ? classify(ip).kind : '', o ? 'AS' + o.asn : '', o?.name || '', o?.prefix || '', o?.ix || '', g?.country || '', g?.city || '',
+        r ? +r.min.toFixed(2) : '', r ? +r.avg.toFixed(2) : '', r ? +r.max.toFixed(2) : '', A.L[i] != null ? +A.L[i].toFixed(1) : '',
+        [txt(A.ctx[i] || ''), ...A.notes[i].map(txt)].filter(Boolean).join('; ')]; })];
+}
+function report(){
+  const A = S.A, d = S.dest;
+  const cells = S.hops.map((h, i) => { const r = A.R[i], o = A.own[i], g = A.G[i], ip = prim(h), c = ip && classify(ip);
+    return [String(h.n), h.addrs.map(a => a.ip).join(', ') || h.host || '*',
+      o ? `AS${o.asn} ${shortName(o.name)}${o.ix ? ` (IXP ${o.ix})` : ''}` : [c && c.kind !== 'public' ? c.label : '', txt(A.ctx[i] || '')].filter(Boolean).join(' — '),
+      g && !A.badGeo.has(i) ? [g.city, g.cc].filter(Boolean).join(', ') : '',
+      r ? `${fmtMs(r.min)}/${fmtMs(r.avg)}/${fmtMs(r.max)} ms` : '*', A.L[i] > 0 ? fmtMs(A.L[i]) + '% loss' : '']; });
+  const w = cells[0].map((_, c) => Math.max(...cells.map(r => r[c].length)));
+  return [
+    `Traceroute${d ? ` to ${d.name}${d.ip && d.ip !== d.name ? ` [${d.ip}]` : ''}` : ''}${A.reached >= 0 ? ` — reached in ${S.hops[A.reached].n} hops` : d?.ip ? ' — destination not reached' : ''}`,
+    ...(A.path.length ? ['Networks: ' + A.path.map(p => `AS${p.asn} ${shortName(p.name)}`).join(' → ')] : []), '',
+    ...cells.map(r => r.map((v, c) => c === 0 ? v.padStart(w[c]) : v.padEnd(w[c])).join('  ').trimEnd()), '',
+    'Findings:', ...A.F.map(([lv, h]) => `- [${LV[lv][1]}] ${txt(h)}`),
+  ].join('\n');
+}
+
+async function run(){
+  const text = $('#in').value; if (!text.trim()) return;
+  const p = parse(text), id = ++runId;
+  if (!p.hops.length) { $('#out').innerHTML = '<div class="err">No hops or IP addresses found. Paste the full output of tracert, traceroute, mtr or tracepath.</div>'; return; }
+  S = { ...p, online: $('#optOnline').checked, info: new Map(), pending: 0 };
+  render();
+  if (!S.online) return;
+  const named = p.hops.filter(h => !h.addrs.length && h.host?.includes('.'));   // mtr / tracepath without -n show names only
+  S.pending = named.length; if (named.length) render();
+  await pool(named, 4, async h => { const ip = await resolveHost(h.host); if (id !== runId) return; if (ip) { h.addrs.push({ ip, host: h.host, resolved: true }); h.host = null; } });
+  if (id !== runId) return;
+  const ips = [...new Set(p.hops.flatMap(h => h.addrs.map(a => a.ip)).filter(ip => classify(ip).kind === 'public'))];
+  S.pending = ips.length; render();
+  await pool(ips, 4, async ip => { const info = await lookupIP(ip); if (id !== runId) return; S.info.set(ip, info); S.pending--; schedule(); });
+  if (id === runId) { S.pending = 0; render(); }
+}
+$('#go').onclick = run;
+$('#sample').onclick = () => { $('#in').value = SAMPLE; run(); };
+$('#clear').onclick = () => { runId++; $('#in').value = ''; $('#out').innerHTML = ''; };
+$('#in').addEventListener('keydown', e => (e.ctrlKey || e.metaKey) && e.key === 'Enter' && run());
+if (getParam('q')) { $('#in').value = getParam('q'); run(); }
+</script>

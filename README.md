@@ -16,6 +16,7 @@ A browser-based toolbox for ISP operators, network engineers, DNS admins and sec
 | Subnet Calculator | offline | IPv4/IPv6 math, VLSM planner, aggregation, subtraction, overlap finder, cheat sheet |
 | Subnet Visualizer | offline | Split/join address plans with notes, colors, block map and shareable links |
 | BGP Toolkit | online | ASN/prefix lookup, RPKI, looking-glass AS paths and path / neighbour graphs (RIPEstat), prefix lists, communities, AS-path regex |
+| Traceroute Analyzer | online | Parses tracert / traceroute / mtr / tracepath / Cisco / Juniper / MikroTik output; hop owner (ASN, prefix), IXP (PeeringDB), location, PTR, private/CGNAT hops, ICMP deprioritisation vs real latency and loss |
 | Blocklist Converter | offline | RPZ, Unbound, dnsmasq, MikroTik, AdGuard, Squid, ipset |
 | PCAP Analyzer | offline | pcap/pcapng triage: port scans, DNS/DGA/tunneling, ICMP channels, follow stream, HTTP export, credentials |
 | MAC Address Lookup | online | OUI vendor, formats, randomized MAC, EUI-64 |
@@ -27,7 +28,7 @@ A browser-based toolbox for ISP operators, network engineers, DNS admins and sec
 | Image Steganography | offline | Bit planes, channel views, LSB extraction and auto-scan |
 | RSA Toolkit | offline | d / decrypt, factoring (Fermat, Pollard rho, multi-prime), small-e and Wiener attacks |
 
-**Offline** tools never send data anywhere. **Online** tools call public APIs (Cloudflare/Google DoH, rdap.org, RIPEstat, ipify, Cloudflare speed test, crt.sh, CertSpotter, ipwho.is, maclookup.app) directly from the visitor's browser.
+**Offline** tools never send data anywhere. **Online** tools call public APIs (Cloudflare/Google DoH, rdap.org, RIPEstat, ipify, Cloudflare speed test, crt.sh, CertSpotter, ipwho.is, maclookup.app, PeeringDB) directly from the visitor's browser.
 
 ## Deploy
 Push this folder to a repo → Settings → Pages → Deploy from branch → `main` / root.
