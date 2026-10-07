@@ -1,4 +1,4 @@
-<!-- title: Subnet Visualizer | desc: Design network layouts visually — split and join subnets, add notes and colors, see the address space as a block map, auto-allocate from host counts and share the layout as a link. | js: netcalc -->
+<!-- title: Subnet Visualizer | desc: Design network layouts visually — split and join subnets, add notes and colors, see the address space as boxes or a block map, auto-allocate from host counts and share the layout as a link. | js: netcalc -->
 <style>
 #vt td.sj{width:24px;min-width:24px;padding:0;text-align:center;vertical-align:middle;cursor:pointer;color:#1b1f24;font-size:11.5px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;border:1px solid var(--panel);user-select:none}
 #vt td.sj span{writing-mode:vertical-rl;display:inline-block;padding:4px 0}
@@ -14,6 +14,21 @@
 #map div{min-width:2px;border-right:1px solid var(--panel);display:flex;align-items:center;justify-content:center;font-size:11px;overflow:hidden;white-space:nowrap;cursor:pointer;color:var(--text)}
 #map div:last-child{border-right:none}
 #vt tr.hl td:not(.sj){outline:2px solid var(--accent);outline-offset:-2px}
+.seg{display:inline-flex;flex:none;border:1px solid var(--border);border-radius:7px;overflow:hidden}
+.seg button{border:0;border-radius:0;padding:5px 11px;font-size:13px;background:var(--panel);color:var(--muted)}
+.seg button+button{border-left:1px solid var(--border)}
+.seg button.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+#boxSel{flex:1 1 320px;min-width:0;margin:0;font-size:13px}
+#boxSel .selnote{flex:1;min-width:140px;max-width:280px;padding:5px 8px}
+#boxSel button:not(.sw){padding:5px 10px;font-size:13px}
+#boxes{position:relative;height:clamp(240px,46vw,560px);margin-top:10px;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--panel);user-select:none}
+#boxes .bx{position:absolute;display:flex;flex-direction:column;gap:1px;padding:4px 6px;border:1px solid var(--panel);background:var(--accent-soft);color:var(--text);font-size:12px;line-height:1.3;overflow:hidden;cursor:pointer}
+#boxes .bx.free{background:repeating-linear-gradient(135deg,var(--code-bg) 0 6px,var(--border) 6px 7px)}
+#boxes .bx:hover{box-shadow:inset 0 0 0 2px var(--muted)}
+#boxes .bx.on{box-shadow:inset 0 0 0 2px var(--accent)}
+#boxes .bx b,#boxes .bx span,#boxes .bx small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#boxes .bx b{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
+#boxes .bx small{color:var(--muted);font-size:11px}
 </style>
 <section class="panel">
   <div class="row" style="margin-top:0;align-items:flex-end">
@@ -30,9 +45,14 @@
     <div class="row"><button class="primary" id="allocGo">Allocate</button><span class="muted">Replaces the current layout.</span></div>
   </div>
   <div id="msg"></div>
-  <div id="map"></div>
+  <div class="row" style="margin-top:12px;align-items:flex-start">
+    <div class="seg" id="viewSeg" role="group" aria-label="Visualization"><button data-v="boxes" title="Each subnet as a box, sized by its share of the network">Boxes</button><button data-v="bar" title="Subnets in address order along one bar">Bar</button></div>
+    <div id="boxSel" class="row"></div>
+  </div>
+  <div id="boxes"></div>
+  <div id="map" hidden></div>
   <div class="tablewrap" style="margin-top:12px"><table id="vt"></table></div>
-  <p class="note">Click a <span style="color:#e8765a;font-weight:600">split</span> cell to divide a subnet in two; click a <span style="color:#4a95c7;font-weight:600">join</span> cell to merge everything under it. Notes, colors and the layout are kept in the page URL.</p>
+  <p class="note">Click a <span style="color:#e8765a;font-weight:600">split</span> cell to divide a subnet in two; click a <span style="color:#4a95c7;font-weight:600">join</span> cell to merge everything under it. In the box view each split halves its box, so area matches address share — double-click a box to split it. Notes, colors and the layout are kept in the page URL.</p>
 </section>
 
 <script>
@@ -100,23 +120,92 @@ function render(){
     html += '</tr>';
   });
   $('#vt').innerHTML = html + '</tbody>';
-  // block map: width proportional to address share
-  $('#map').innerHTML = rows.map(({ n }, i) => { const frac = Math.pow(2, root.p - n.p), bg = colorOf(n.color) || (i % 2 ? 'var(--code-bg)' : 'var(--accent-soft)');
-    return `<div data-m="${i}" style="flex:${frac} 1 0;background:${bg}" title="${esc(cidrStr(n.net, n.p, v) + (n.note ? ' — ' + n.note : ''))}">${frac > 0.07 ? esc(n.note || '/' + n.p) : ''}</div>`; }).join('');
-  window._rows = rows; save();
+  window._rows = rows;
+  if (selNode && !rows.some(r => r.n === selNode)) selNode = null;
+  renderMap(); renderBoxes(); select(selNode);
+  save();
+}
+// block map: width proportional to address share
+function renderMap(){
+  $('#map').innerHTML = _rows.map(({ n }, i) => { const frac = Math.pow(2, root.p - n.p), bg = colorOf(n.color) || (i % 2 ? 'var(--code-bg)' : 'var(--accent-soft)');
+    return `<div data-m="${i}" style="flex:${frac} 1 0;background:${bg}" title="${esc(cidrStr(n.net, n.p, n.v) + (n.note ? ' — ' + n.note : ''))}">${frac > 0.07 ? esc(n.note || '/' + n.p) : ''}</div>`; }).join('');
+}
+
+/* ---------- box view: the split tree as nested halves, so each box's area is its share of the network ---------- */
+let selNode = null, boxRaf = 0;
+const pc = (a, b) => (a / b * 100).toFixed(3) + '%';
+const hostsTxt = n => { const b = bitsOf(n.v) - n.p; return b > 32 ? `2^${b} addresses` : `${usableHosts(n.p, n.v).toLocaleString()} usable`; };
+const boxesLater = () => { boxRaf ||= requestAnimationFrame(() => { boxRaf = 0; renderBoxes(); }); };
+function renderBoxes(){
+  const el = $('#boxes'), W = el.clientWidth, H = el.clientHeight;
+  if (!W || !H || !root || !window._rows) return;
+  const idx = new Map(_rows.map((r, i) => [r.n, i])), out = [];
+  const lay = (n, x, y, w, h) => {
+    if (!n.kids) { out.push([n, x, y, w, h]); return; }
+    const vert = w >= h;   // cut across the longer side so boxes stay between 1:2 and 2:1
+    lay(n.kids[0], x, y, vert ? w / 2 : w, vert ? h : h / 2);
+    lay(n.kids[1], vert ? x + w / 2 : x, vert ? y : y + h / 2, vert ? w / 2 : w, vert ? h : h / 2);
+  };
+  lay(root, 0, 0, W, H);
+  el.innerHTML = out.map(([n, x, y, w, h]) => {
+    const bg = colorOf(n.color), cidr = cidrStr(n.net, n.p, n.v), note = n.note ? `<span>${esc(n.note)}</span>` : '';
+    const label = w >= 120 && h >= 52 ? `<b>${cidr}</b>${note}<small>${hostsTxt(n)}</small>` : w >= 56 && h >= 30 ? `<b>/${n.p}</b>${note}` : w >= 30 && h >= 18 ? `<b>/${n.p}</b>` : '';
+    const tip = `${cidr}\n${fmtIP(n.net, n.v)} – ${fmtIP(n.net + blockSize(n.p, n.v) - 1n, n.v)}\n${hostsTxt(n)}${n.note ? '\n' + n.note : ''}`;
+    return `<div class="bx${!bg && !n.note ? ' free' : ''}${n === selNode ? ' on' : ''}" data-b="${idx.get(n)}" style="left:${pc(x, W)};top:${pc(y, H)};width:${pc(w, W)};height:${pc(h, H)}${bg ? `;background:${bg}` : ''}" title="${esc(tip)}">${label}</div>`;
+  }).join('');
+}
+function select(n){
+  selNode = n || null;
+  const i = selNode ? _rows.findIndex(r => r.n === selNode) : -1;
+  $$('#boxes .bx.on').forEach(b => b.classList.remove('on')); $$('#vt tr.hl').forEach(x => x.classList.remove('hl'));
+  if (i >= 0) { $(`#boxes [data-b="${i}"]`)?.classList.add('on'); $(`#vt tr[data-i="${i}"]`)?.classList.add('hl'); }
+  const r = _rows[i];
+  if (!r) { $('#boxSel').innerHTML = '<span class="muted">Click a subnet to select it · double-click a box to split it · hatched boxes have no note yet.</span>'; return; }
+  const v = root.v, parent = r.anc.at(-1), bg = colorOf(n.color);
+  $('#boxSel').innerHTML = `<b class="mono">${cidrStr(n.net, n.p, v)}</b><span class="muted mono">${fmtIP(n.net, v)} – ${fmtIP(n.net + blockSize(n.p, v) - 1n, v)}</span><span class="muted">${hostsTxt(n)}</span>
+    <input type="text" class="selnote" value="${esc(n.note)}" placeholder="Note…" spellcheck="false" aria-label="Note for ${esc(cidrStr(n.net, n.p, v))}"><button class="sw" data-sa="color" title="Change color" style="background:${bg || 'var(--panel)'}"></button>
+    <button data-sa="split"${n.p >= bitsOf(v) ? ' disabled' : ''}>Split into /${n.p + 1}s</button>${parent ? `<button data-sa="join">Join into ${cidrStr(parent.net, parent.p, v)}</button>` : ''}`;
+}
+function trySplit(n){
+  if (n.p >= bitsOf(n.v)) return false;
+  if (leavesOf(root).length >= MAX_LEAVES) { msg(`Limit of ${MAX_LEAVES} rows reached — join something first.`); return false; }
+  split(n); msg(''); return true;
 }
 
 /* ---------- interactions ---------- */
 $('#vt').addEventListener('click', e => {
   const s = e.target.closest('[data-split]'), j = e.target.closest('[data-join]'), c = e.target.closest('[data-c]');
-  if (s) { const n = _rows[+s.dataset.split].n; if (n.p >= bitsOf(n.v)) return; if (leavesOf(root).length >= MAX_LEAVES) { msg(`Limit of ${MAX_LEAVES} rows reached — join something first.`); return; } split(n); msg(''); render(); }
+  if (s) { if (trySplit(_rows[+s.dataset.split].n)) render(); }
   else if (j) { const [i, k] = j.dataset.join.split(':').map(Number); join(_rows[i].anc[k]); render(); }
   else if (c) { const n = _rows[+c.dataset.c].n; n.color = (n.color + 1) % COLORS.length; render(); }
+  else { const tr = e.target.closest('tr[data-i]'); if (tr && _rows[+tr.dataset.i].n !== selNode) select(_rows[+tr.dataset.i].n); }
 });
-$('#vt').addEventListener('input', e => { const t = e.target.closest('input.note'); if (!t) return; _rows[+t.dataset.i].n.note = t.value;
-  const m = $(`#map [data-m="${t.dataset.i}"]`); if (m && m.textContent) m.textContent = t.value || '/' + _rows[+t.dataset.i].n.p; save(); });
+$('#vt').addEventListener('focusin', e => { const t = e.target.closest('input.note'); if (t && _rows[+t.dataset.i].n !== selNode) select(_rows[+t.dataset.i].n); });
+$('#vt').addEventListener('input', e => { const t = e.target.closest('input.note'); if (!t) return; const n = _rows[+t.dataset.i].n; n.note = t.value;
+  const m = $(`#map [data-m="${t.dataset.i}"]`); if (m && m.textContent) m.textContent = t.value || '/' + n.p;
+  if (n === selNode) { const s = $('#boxSel .selnote'); if (s) s.value = t.value; }
+  boxesLater(); save(); });
 $('#map').addEventListener('click', e => { const d = e.target.closest('[data-m]'); if (!d) return; const tr = $(`#vt tr[data-i="${d.dataset.m}"]`);
-  $$('#vt tr.hl').forEach(x => x.classList.remove('hl')); tr.classList.add('hl'); tr.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); tr.querySelector('input.note').focus(); });
+  select(_rows[+d.dataset.m].n); tr.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); tr.querySelector('input.note').focus(); });
+$('#boxes').addEventListener('click', e => { const b = e.target.closest('[data-b]'); if (b) select(_rows[+b.dataset.b].n); });
+$('#boxes').addEventListener('dblclick', e => { const b = e.target.closest('[data-b]'); if (!b) return; const n = _rows[+b.dataset.b].n; if (trySplit(n)) { selNode = n.kids[0]; render(); } });
+$('#boxSel').addEventListener('click', e => {
+  const a = e.target.closest('[data-sa]')?.dataset.sa, r = selNode && _rows.find(x => x.n === selNode); if (!a || !r) return;
+  if (a === 'split' && trySplit(selNode)) { selNode = selNode.kids[0]; render(); }
+  if (a === 'join') { const parent = r.anc.at(-1); join(parent); selNode = parent; render(); }
+  if (a === 'color') { selNode.color = (selNode.color + 1) % COLORS.length; render(); }
+});
+$('#boxSel').addEventListener('input', e => {
+  if (!e.target.matches('.selnote') || !selNode) return;
+  selNode.note = e.target.value;
+  const t = $(`#vt input.note[data-i="${_rows.findIndex(r => r.n === selNode)}"]`); if (t) t.value = e.target.value;
+  renderMap(); boxesLater(); save();
+});
+let view = window.NetopsHistory?.kv('subnet-visualizer:view') === 'bar' ? 'bar' : 'boxes';
+function setView(v){ view = v; $('#boxes').hidden = v !== 'boxes'; $('#map').hidden = v !== 'bar'; $$('#viewSeg button').forEach(b => b.classList.toggle('on', b.dataset.v === v)); boxesLater(); }
+$('#viewSeg').onclick = e => { const b = e.target.closest('[data-v]'); if (!b) return; setView(b.dataset.v); window.NetopsHistory?.kv('subnet-visualizer:view', view); };
+setView(view);
+new ResizeObserver(boxesLater).observe($('#boxes'));   // re-cut on resize: the longer side decides each split's direction
 const msg = (t, cls = 'err') => $('#msg').innerHTML = t ? `<div class="${cls}">${t}</div>` : '';
 
 function start(fromInputs = true){
